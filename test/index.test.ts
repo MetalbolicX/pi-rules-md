@@ -196,7 +196,7 @@ describe("createRulesExtension event folding", () => {
 		expect(discoverCalls[0]).toEqual({ cwd: normalizedPath("/work"), isProjectTrusted: true });
 	});
 
-	it("session_compact clears hysteresis so the identical set patches again", async () => {
+	it("re-applies the identical set every turn and patches again after a compact", async () => {
 		const { deps } = depsWith({ rules: [ruleWith({})] });
 		const api = fakeApi();
 		createRulesExtension(deps)(api.api);
@@ -207,9 +207,10 @@ describe("createRulesExtension event folding", () => {
 		expect(sections["pi-rules-md"]).toContain("# Rules");
 		sections["pi-rules-md"] = "SENTINEL";
 
-		// Unchanged set: hysteresis skips the patch, sentinel survives.
+		// Unchanged set: still applied — pi rebuilds sections every turn, so the
+		// identical re-apply is what keeps the section live (sentinel overwritten).
 		await emitStart(api, ctx, sections);
-		expect(sections["pi-rules-md"]).toBe("SENTINEL");
+		expect(sections["pi-rules-md"]).toContain("# Rules");
 
 		// Compaction resets the last-injected hash: the same set patches again.
 		await emitSignal(api, { type: "session_compact" }, ctx);
@@ -260,7 +261,7 @@ describe("createRulesExtension before_agent_start cycle", () => {
 		expect(report).toContain(`injected: section pi-rules-md (hash `);
 	});
 
-	it("decides none for an unchanged set: the sections Record is not touched", async () => {
+	it("re-applies an unchanged set with identical content so the section stays live", async () => {
 		const { deps } = depsWith({ rules: [ruleWith({})] });
 		const api = fakeApi();
 		createRulesExtension(deps)(api.api);
@@ -268,11 +269,13 @@ describe("createRulesExtension before_agent_start cycle", () => {
 
 		const sections: Record<string, string> = {};
 		await emitStart(api, ctx, sections);
-		expect(sections["pi-rules-md"]).toContain("# Rules");
-		sections["pi-rules-md"] = "SENTINEL";
+		const firstContent: string = sections["pi-rules-md"] ?? "";
+		expect(firstContent).toContain("# Rules");
 
+		// Turn 2, same set: the section is re-written with identical content
+		// (pi's diff then emits nothing), not skipped and not dropped.
 		await emitStart(api, ctx, sections);
-		expect(sections["pi-rules-md"]).toBe("SENTINEL");
+		expect(sections["pi-rules-md"]).toBe(firstContent);
 	});
 });
 

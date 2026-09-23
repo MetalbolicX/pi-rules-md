@@ -12,9 +12,11 @@
  *   hashing/rendering happen inside the injected pure stages. Equal inputs
  *   produce deep-equal outputs.
  * - Totality of the fold: the decision is applied to the state, never to pi:
- *   `patch` folds `block_injected(block.contentHash)`, `remove` folds
- *   `block_removed`, and `none` leaves the state object untouched (the very
- *   same reference flows out — zero-cost hysteresis skip).
+ *   `patch` folds `block_injected(block.contentHash)` (a repeated identical
+ *   hash is an idempotent same-value overwrite — pi rebuilds sections every
+ *   turn, so every patch re-records it), `remove` folds `block_removed`, and
+ *   `none` leaves the state object untouched (the very same reference flows
+ *   out — only possible when nothing is active and nothing was injected).
  * - Section mutation is NOT done here: the pipeline never touches a sections
  *   object. `index.ts` applies `decision` to pi's
  *   `systemPromptOptions.sections` via `applyInjection`/`removeInjection`,

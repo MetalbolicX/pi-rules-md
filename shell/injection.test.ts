@@ -44,8 +44,17 @@ describe("injectionDecision — decision table", () => {
 		expect(injectionDecision(blockFixture("hash-2"), "hash-1")).toEqual({ action: "patch" });
 	});
 
-	it("does nothing when a block exists and its hash equals the last injected one (hysteresis)", () => {
-		expect(injectionDecision(blockFixture("hash-1"), "hash-1")).toEqual({ action: "none" });
+	it("patches even when a block exists and its hash equals the last injected one (pi rebuilds sections every turn)", () => {
+		// THE FIX (T14 dogfood defect): pi rebuilds systemPromptOptions.sections
+		// from its base EVERY turn, so an equal hash must NOT skip the write —
+		// the section would silently drop from the live system prompt. The
+		// decision always re-applies; identical content means pi's section diff
+		// emits nothing (content stability), and applyInjection keeps the
+		// section live on an unchanged turn.
+		expect(injectionDecision(blockFixture("hash-1"), "hash-1")).toEqual({ action: "patch" });
+		const sections: PromptSections = {};
+		applyInjection(sections, blockFixture("hash-1", "content-1"));
+		expect(sections[sectionId]).toBe("content-1");
 	});
 
 	it("removes when the block is gone but a section was injected before", () => {
@@ -110,15 +119,16 @@ describe("removeInjection", () => {
 });
 
 describe("hash hysteresis — reducer + decision end to end", () => {
-	it("injects, skips the identical block, then re-patches the same block after a compact", () => {
+	it("injects, keeps re-applying the identical block every turn, then re-patches after a compact", () => {
 		const block = blockFixture("hash-1");
 		let state: SessionState = initialState;
 
 		expect(injectionDecision(block, state.lastInjectedHash)).toEqual({ action: "patch" });
 		state = transition(state, { type: "block_injected", contentHash: block.contentHash });
 
-		// Unchanged active set: hysteresis must skip the patch entirely.
-		expect(injectionDecision(block, state.lastInjectedHash)).toEqual({ action: "none" });
+		// Unchanged active set: still patch — pi rebuilds sections per turn, so
+		// the write must happen again (identical content → empty section diff).
+		expect(injectionDecision(block, state.lastInjectedHash)).toEqual({ action: "patch" });
 
 		state = transition(state, { type: "session_compact" });
 		expect(injectionDecision(block, state.lastInjectedHash)).toEqual({ action: "patch" });
@@ -131,8 +141,8 @@ describe("hash hysteresis — reducer + decision end to end", () => {
 
 		expect(injectionDecision(undefined, state.lastInjectedHash)).toEqual({ action: "remove" });
 
-		// block_removed clears the hash: without it, the equal-hash decision
-		// below would be "none" and the section could never come back.
+		// block_removed clears the hash: a later no-block turn then decides
+		// "none" instead of repeating a removal.
 		state = transition(state, { type: "block_removed" });
 		expect(injectionDecision(block, state.lastInjectedHash)).toEqual({ action: "patch" });
 	});

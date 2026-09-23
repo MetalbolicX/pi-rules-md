@@ -18,13 +18,22 @@
  * mirror is structural, so typed fakes can test it and pi upgrades that only
  * add fields stay assignable.
  *
+ * Hash hysteresis means content STABILITY, not write skipping (T14 dogfood
+ * defect fix, verified against pi 0.87.1): pi rebuilds
+ * `systemPromptOptions.sections` from its base EVERY turn, so extension
+ * mutations do not persist and the section must be re-applied while a block
+ * exists. An identical re-apply makes pi's section diff emit nothing — the
+ * hash still buys zero prompt churn, just never at the cost of a dropped
+ * section.
+ *
  * T13 wiring protocol (contract for `index.ts`, not implemented here):
  * - `{ action: "patch" }`  → `applyInjection(sections, block)`, then fold
- *   `{ type: "block_injected", contentHash: block.contentHash }` into state.
+ *   `{ type: "block_injected", contentHash: block.contentHash }` into state
+ *   (folding an identical hash is an idempotent same-value overwrite).
  * - `{ action: "remove" }` → `removeInjection(sections)`, then fold
  *   `{ type: "block_removed" }` into state.
- * - `{ action: "none" }`   → touch nothing, emit no event (zero-cost
- *   hysteresis skip for an unchanged active set).
+ * - `{ action: "none" }`   → touch nothing, emit no event (nothing is active
+ *   and nothing was ever injected).
  */
 import { sectionId } from "../src/render.ts";
 import type { InjectionBlock } from "../src/types.ts";
@@ -42,8 +51,10 @@ export type InjectionDecision = { readonly action: "none" } | { readonly action:
  * Pure, total decision function: `(block, lastInjectedHash) -> decision`.
  * Deterministic for equal inputs, never throws, never mutates.
  *
- * - block defined + hash differs → patch (content changed since last inject)
- * - block defined + hash equal   → none  (hysteresis: unchanged active set)
+ * - block defined                → patch (ALWAYS re-apply: pi rebuilds the
+ *   sections record every turn, so skipping the write on hash equality would
+ *   drop the section; an identical re-apply yields an empty section diff.
+ *   `lastInjectedHash` only feeds the remove quadrant.)
  * - block undefined + hash set   → remove (section no longer wanted)
  * - both undefined               → none  (nothing injected, nothing to do)
  */
@@ -54,7 +65,7 @@ export const injectionDecision = (
 	if (block === undefined) {
 		return lastInjectedHash === undefined ? { action: "none" } : { action: "remove" };
 	}
-	return block.contentHash === lastInjectedHash ? { action: "none" } : { action: "patch" };
+	return { action: "patch" };
 };
 
 /**

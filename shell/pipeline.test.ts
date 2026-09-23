@@ -106,14 +106,18 @@ describe("runInjectionCycle", () => {
 		expect(recorded.scanCalls).toEqual([]);
 	});
 
-	it("is hysteresis end-to-end: an identical second cycle decides none and leaves state untouched", async () => {
+	it("re-applies on an identical second cycle: still patch, state folds to the same value", async () => {
 		const { deps } = depsWith([ruleWith({ id: "always-on" })]);
 		const first = await runInjectionCycle(inputWith(initialState, deps));
 		expect(first.decision).toEqual({ action: "patch" });
 
+		// pi rebuilds sections every turn, so the identical set must still patch
+		// (the write is what keeps the section live); folding the same hash is an
+		// idempotent same-value overwrite, so the new state is value-identical.
 		const second = await runInjectionCycle(inputWith(first.nextState, deps));
-		expect(second.decision).toEqual({ action: "none" });
-		expect(second.nextState).toBe(first.nextState);
+		expect(second.decision).toEqual({ action: "patch" });
+		expect(second.nextState).not.toBe(first.nextState);
+		expect(second.nextState).toEqual(first.nextState);
 		// Each run renders a fresh block object; identity is the content hash.
 		expect(second.block).toEqual(first.block);
 		expect(second.block?.contentHash).toBe(first.block?.contentHash);

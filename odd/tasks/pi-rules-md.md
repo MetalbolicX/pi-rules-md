@@ -104,7 +104,42 @@ no code escape hatches.
   mid-task with interaction_required on the placement question (correct
   behavior); resumed via subagent_continue.
 - [ ] 14. Dogfood: real rules in this environment + marker-token probes
-  (section appears, patch discipline, /rules report)
+  IN PROGRESS — probes run by parent inline (delicate env isolation):
+  scratch project /tmp/pi-rules-dogfood/project with .pi/rules probes
+  (alwaysApply + touched src/**/*.ts), pi --approve --no-extensions -e
+  index.ts (direct jiti load, no ~/.pi mutation), isolated --session-dir.
+  FINDINGS:
+  - PROBE A (pi -p smoke): load clean, exit 0, project rules discovered
+    via --approve trust, alwaysApply rule INJECTED, marker in reply. PASS.
+  - PROBE B (-p multi-prompt): turn 1 write tool → tool_result →
+    paths_touched; turn 2 TOUCH rule matched+injected. PASS — event →
+    collector → reducer → match → patch chain works live.
+  - PROBE C (RPC multi-turn + session-file ground truth): system messages
+    record sections; delta semantics decoded from system-prompt.js:135:
+    content = changed/new key; null = REMOVED from current build; absent =
+    unchanged. Turn 2 (unchanged set, decision none) delta =
+    {pi-rules-md: null} → **DEFECT: pi rebuilds systemPromptOptions per
+    turn from its base; our mutation does not persist; 'none' skip drops
+    the section from the live prompt** (p2/p4 reply tokens were transcript
+    leakage). Turn 3 (set changed → patch) delta carried full content.
+  - PROBE D/E/F (compact): RPC compact refuses "Nothing to compact
+    (session too small)"; real compaction not triggerable headless
+    cheaply — compact→re-inject stays unit-proven; defer to TUI probe.
+  - PROBE G (deactivation): rule file deleted mid-session → next turn
+    delta {pi-rules-md: null} → remove path works live. PASS.
+  - /rules registration proven (load would die on throw); interactive
+    render deferred to TUI. jiti .ts-import loading proven by A.
+  - /rules registration proven (load would die on throw); interactive
+    render deferred to TUI. jiti .ts-import loading proven by A.
+  DEFECT FIXED (strict-TDD work unit; re-probe C2 verified): injection-
+  Decision now returns patch whenever block is defined (re-apply every
+  turn; identical content → pi emits empty diff → zero churn; observed
+  live: unchanged turn 2 → NO system delta; rule deleted → null delta
+  remove). Review lineage review-f86c6014993ee3da APPROVED + burned
+  BEFORE commit, no findings. 310/310, typecheck 0.
+  RESIDUALS (TUI-only, banked): interactive /rules render; real-compaction
+  re-inject (now structurally guaranteed by always-reapply — any active
+  block re-applies on every turn regardless of hash state).
 - [ ] 15. RULE-SPEC.md + README + property tests (fast-check) + perf guard
   (500 rules × 50 paths under budget)
 
