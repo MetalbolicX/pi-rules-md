@@ -39,7 +39,14 @@ no code escape hatches.
   + `combinators.ts` (and/anyOf/not) — df4492a+f49544c (incl. globs:[] fix)
 - [x] 4. `src/conditions/table.ts` — data registry; unknown-key strict errors — ec18878
 - [ ] 5. `src/match.ts` — touched-match + exists-match (extension-targeted
-  project scan derived from globs)
+  project scan derived from globs). In progress; delegated to gentle-ai-worker
+  (multi-file write: implementation, tests, dependency manifest/lock). Strict
+  TDD, `pnpm vitest run`, `pnpm typecheck`; no commit by worker. Review/commit
+  and task checkoff remain with parent. Parent prepared tinyglobby ^0.2.17
+  in package.json/pnpm-lock.yaml; pnpm add returned ERR_PNPM_IGNORED_BUILDS
+  after materialization due to pre-existing workspace allowBuilds placeholders.
+  Read-only incident diagnosis confirmed package and dependencies installed;
+  no build approval or further installer run needed for T5 tests.
 - [ ] 6. `src/select.ts` — dedupe(content hash) → sort(priority) → token
   budget fold (port opencode-rules-md tests where applicable)
 - [ ] 7. `src/render.ts` — strong imperative framing + per-rule trigger
@@ -123,3 +130,9 @@ no code escape hatches.
   (gentle-ai.review-acknowledged/v1, mutation committed) -> reset --hard
   backup/pre-burn -> tree clean 66b93c1. Harness unpatched from backup.
   T2 native review COMPLETE end-to-end.
+- T5 route: delegated direct via gentle-ai-worker; 2+ non-trivial files and
+  dependency manifest/lock. Strict TDD from feature plan, runner `pnpm vitest
+  run` (focused file runner during RED/GREEN). Parent reconciled task file
+  against Engram observation 6951; prior Engram mirror was a summary, so it
+  is being replaced by the full recovery document. Branch feat/pi-rules-md
+  clean at d3114b4 before the T5 writer.
