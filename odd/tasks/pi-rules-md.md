@@ -204,6 +204,21 @@ no code escape hatches.
   canonical relay. Follow-ups banked: stat non-ENOENT still silent-skip
   (cannot throw); source-unreadable never cached (retried per pass,
   chosen).
+- T15 W2 `test: add seeded property tests and pipeline perf guard`
+  (74d5802) — test-only work unit via worker (strict-TDD RED n/a for
+  test-only; validation observed). Vendored mulberry32 harness + generators
+  (18 defect variants pinned to parser precedence); 18 property tests
+  across parser/match/select/render/state/collectors (200 cases each,
+  fixed seeds); perf guard 300×300 measured 38.6ms vs 2000ms ceiling
+  (143.8ms in full-suite run). Full 343/343, typecheck 0. Review lineage
+  review-45861fd8ee0c35a1 (1283 lines) APPROVED + burned BEFORE commit,
+  no findings. Independent verifier PASS (partial only on diff-scope
+  criterion — parent confirmed inline: 9 test files, 0 production files).
+  THREE consent-binding-stale rounds before START adoption (retention
+  needed re-inspect cycles); one more binding transcription corruption
+  (review/review/ schema duplication) — mechanical relay again decisive.
+  Follow-ups banked: `at` undefined-element edge; budget-drop suffix
+  completeness assertion; whole-sequence seed replay assertion.
   (500 rules × 50 paths under budget)
 
 ## Delivery strategy
