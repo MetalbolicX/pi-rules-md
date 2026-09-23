@@ -153,7 +153,8 @@ no code escape hatches.
   ^0.2.17 installed despite pnpm add exit 1 on ignored unrelated builds;
   adapter deferred to T10. No real filesystem/ignore integration tested
   yet; T10 must cover that behavior. Next: T6 selection pipeline.
-- T6 `feat(select): dedupe, priority-sort and budget-fold rule selection` —
+- T6 a1f5d8a `feat(select): dedupe, priority-sort and budget-fold rule
+  selection` —
   strict TDD RED (missing `./select.ts` module), GREEN 15/15 then 20/20
   after triangulation; full 193/193 (173 pre-existing unchanged), typecheck
   0. Stages exported individually (dedupeByContent, sortByPriority,
@@ -164,4 +165,7 @@ no code escape hatches.
   BEFORE commit, one non-blocking advisory finding R3-001
   (src/select.ts:77, WARNING, informational) recorded as T15 follow-up
   nit. Worker fixture bugs fixed in-test during GREEN (content-identical
-  fixtures) — implementation unchanged.
+  fixtures) — implementation unchanged. Independent verifier PASS (20/20,
+  193/193, typecheck 0; no severe bug, no T8 regression risk; R3-001 noted
+  informational). Running authored diff from main: 3058 additions + 13
+  deletions = 3071 lines. Next: T7 rendering.
