@@ -297,5 +297,9 @@ no code escape hatches.
   import (sole reference: `import type { ExtensionAPI }` index.ts:17).
   Native workspace review lineage review-67d59cfee88ba9d2: medium tier
   (850 changed lines), review-reliability APPROVED, acknowledged (burned)
-  BEFORE commit, NO findings. Independent verifier pending (runs after
-  commit per committed-range assess fallback). Next: T14 dogfood.
+  BEFORE commit, NO findings. Independent verifier PASS (9/9, 7/7, 310/310,
+  typecheck 0; SDK anchors, registration surface, signal folding, hysteresis,
+  pipeline determinism, dirs, import audit all confirmed). Follow-ups for
+  T14 dogfood: non-ENOENT rethrow in discovery can propagate from
+  before_agent_start (already banked as highest-priority hardening); jiti/
+  pi -p loader path unverified until dogfood. Next: T14 dogfood.
