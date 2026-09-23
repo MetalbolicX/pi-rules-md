@@ -184,4 +184,8 @@ no code escape hatches.
   review-reliability APPROVED and acknowledged (authority burned) BEFORE
   commit; advisory R3-001 (src/render.ts:78, WARNING, informational;
   verbatim content with trailing newline double-newlines before separator)
-  recorded as T15 nit alongside the worker's identical flag.
+  recorded as T15 nit alongside the worker's identical flag. Independent
+  verifier PASS (9/9, 202/202, typecheck 0; no severe issue). Follow-up
+  nits banked for T15: verbatim-content trailing newline (R3-001) and no
+  compile-time exhaustiveness guard for future MatchReason variants
+  (noImplicitReturns off). Next: T8 engine pipeline + EvaluationTrace.
