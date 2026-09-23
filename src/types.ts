@@ -181,7 +181,7 @@ export interface InjectionBlock {
 	readonly sectionId: string;
 	/** Rendered markdown to inject. */
 	readonly content: string;
-	/** Hash of the content; drives hash hysteresis (skip identical patches). */
+	/** Hash of the content; stable content re-applies with no prompt diff. */
 	readonly contentHash: string;
 }
 

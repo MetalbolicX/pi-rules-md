@@ -12,8 +12,9 @@ import type { NormalizedPath } from "./types.ts";
 /**
  * Everything the injection layer needs to remember between turns: which
  * paths the agent touched (deduped, first-seen order) and the content hash
- * of the last injected section (drives hysteresis: an unchanged active set
- * means no patch at all).
+ * of the last injected section (records that a section was injected;
+ * an unchanged active set re-applies byte-identical content, producing
+ * no system-prompt diff).
  */
 export interface SessionState {
 	/** Paths touched so far this session, first-seen order, exact-string deduped. */

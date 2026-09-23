@@ -21,8 +21,9 @@
  * - The content ends with exactly one renderer-added trailing newline.
  *
  * `contentHash` is the sha-256 hex digest of the full rendered content
- * (node:crypto, no dependencies) and drives hash hysteresis: an unchanged
- * active set renders byte-identically, hashes identically, and is skipped.
+ * (node:crypto, no dependencies) and drives content stability: an
+ * unchanged active set renders byte-identically, so re-applying it each
+ * turn produces no system-prompt diff (pi rebuilds sections per turn).
  * All functions are pure and deterministic: no I/O, no module state.
  */
 import { createHash } from "node:crypto";

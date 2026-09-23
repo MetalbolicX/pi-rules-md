@@ -13,7 +13,9 @@ verified from source; key decisions recorded there.
 - Injection ONLY via `systemPromptOptions.sections` mutation in
   `before_agent_start` — never `systemPrompt` (cache miss + clobbers other
   extensions), never persistent `message` (accumulates in transcript).
-- Hash hysteresis: unchanged active set → mutate nothing (zero patch cost).
+- Content stability (was "hash hysteresis"): unchanged active set →
+  re-apply byte-identical section → pi emits empty diff (zero churn);
+  pi rebuilds sections per turn, so writes must be re-applied each turn.
 - `session_compact` → reset last-injected hash; `session_before_switch`/`fork`
   → reset session state.
 - Project rules gated by `ctx.isProjectTrusted()`.
@@ -140,6 +142,16 @@ no code escape hatches.
   RESIDUALS (TUI-only, banked): interactive /rules render; real-compaction
   re-inject (now structurally guaranteed by always-reapply — any active
   block re-applies on every turn regardless of hash state).
+- T14 `fix(shell): re-apply rules section every turn for pi rebuild
+  semantics` (194ede3) — worker strict-TDD (equal-hash quadrant RED→
+  patch-expecting GREEN), 310/310, typecheck 0; review lineage
+  review-f86c6014993ee3da APPROVED + burned BEFORE commit, no findings;
+  re-probe C2 live-verified (unchanged turn → no delta; delete → remove
+  delta). Independent verifier PASS (13/13, 310/310, typecheck 0;
+  follow-up: stale comments describing skip semantics — fixed in docs
+  commit). One transcription-corruption round on collectBinding relay
+  (bogus --pad token; exact re-relay accepted). Probes A/B/C/G PASS;
+  compact + /rules render deferred to TUI residuals.
 - [ ] 15. RULE-SPEC.md + README + property tests (fast-check) + perf guard
   (500 rules × 50 paths under budget)
 
