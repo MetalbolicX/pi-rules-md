@@ -68,8 +68,14 @@ no code escape hatches.
   lastInjectedHash} + StateEvent union (paths_touched first-seen dedupe
   merge; block_injected hash overwrite; session_compact clears hash keeps
   paths; session_reset → initialState); total, pure, unknown-kind no-op.
-- [ ] 10. `shell/discovery.ts` — global ~/.pi/agent/rules/ + project .pi/rules/,
-  trust gate, mtime cache
+- [x] 10. `shell/discovery.ts` — discovery + trust gate + mtime cache +
+  production tinyglobby scanner with ignore policy. Implemented per pinned
+  contract: injected DiscoveryDeps; discover(deps, cache, opts) → {rules,
+  errors, cache}; project-first ordering (content-tie dedupe prefers
+  project, matching opencode); recursive **/*.md; Rule.id finalized to file
+  stem post-parse (parser owns validation); missing dir → empty; vanished
+  mid-scan → skip; mtime cache reuses rule OR error. Production:
+  nodeDiscoveryDeps() + tinyglobbyScanner (ignore .git/node_modules).
 - [ ] 11. `shell/collectors.ts` — pi events → Signals (typed fake-event tests)
 - [ ] 12. `shell/injection.ts` — sections mutation + hash hysteresis
 - [ ] 13. `index.ts` wiring + `/rules` command + EvaluationLog
@@ -222,3 +228,19 @@ no code escape hatches.
   Independent verifier PASS (14/14, 240/240, typecheck 0; totality, purity,
   merge semantics confirmed; no T11/T12 regression risk). Next: T10 shell
   discovery + production scan adapter.
+- T10 `feat(shell): rule discovery with mtime cache and tinyglobby scanner`
+  — strict TDD RED (missing ./discovery.ts), GREEN 16/16 (14 fake-deps unit
+  + 2 real-tmpdir adapter integration); full 256/256 (240 pre-existing
+  unchanged), typecheck 0. INCIDENT mid-review: native binary vanished
+  (package-local-binary-missing) → installer shipped gentle-ai 3.6.1
+  (upstream release; was 3.5.0) + `gentle-ai sync --agent pi` (2 files) →
+  review flow restored. Native workspace review lineage
+  review-dcb6376a6b484091: medium tier, review-reliability APPROVED and
+  acknowledged (authority burned) BEFORE commit; advisories R3-001 +
+  R3-002 (informational) banked for T15. One parent relay slip (corrupted
+  repository-context handle in argumentTokens) rejected as
+  capture-binding-rejected; fresh STATUS + exact re-relay accepted.
+  Worker disclosures adjudicated: id=file-stem override honored (stem
+  collision across subdirs banked T15); listRuleFiles without ignore
+  banked T15; non-ENOENT stat/read failures conflated with vanished-skip
+  banked T15.
