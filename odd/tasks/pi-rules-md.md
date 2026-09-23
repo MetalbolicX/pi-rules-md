@@ -41,8 +41,11 @@ no code escape hatches.
 - [x] 5. `src/match.ts` — touched-match + exists-match; injected
   extension-targeted scan seam derived from globs — 20b5632. Production
   tinyglobby adapter/ignore policy remains for T10 shell wiring.
-- [ ] 6. `src/select.ts` — dedupe(content hash) → sort(priority) → token
-  budget fold (port opencode-rules-md tests where applicable)
+- [x] 6. `src/select.ts` — dedupe(content hash) → sort(priority) → token
+  budget fold. Parent-pinned decisions implemented as contract: dedupe
+  keeps FIRST occurrence (sha-256 of content via node:crypto), sort
+  priority DESC stable on ties, fold stops at the first non-fitting rule
+  and drops the remainder, token estimate ceil(chars/4).
 - [ ] 7. `src/render.ts` — strong imperative framing + per-rule trigger
   metadata; golden-file tests
 - [ ] 8. `src/engine.ts` — evaluate pipeline + immutable EvaluationTrace
@@ -150,3 +153,15 @@ no code escape hatches.
   ^0.2.17 installed despite pnpm add exit 1 on ignored unrelated builds;
   adapter deferred to T10. No real filesystem/ignore integration tested
   yet; T10 must cover that behavior. Next: T6 selection pipeline.
+- T6 `feat(select): dedupe, priority-sort and budget-fold rule selection` —
+  strict TDD RED (missing `./select.ts` module), GREEN 15/15 then 20/20
+  after triangulation; full 193/193 (173 pre-existing unchanged), typecheck
+  0. Stages exported individually (dedupeByContent, sortByPriority,
+  foldBudget, estimateTokens, contentHash) composed by selectRules; drops
+  stage-ordered (duplicates in input order, then budget drops in priority
+  order). Native workspace review lineage review-d122c277d9b71d45: medium
+  tier, review-reliability APPROVED and acknowledged (authority burned)
+  BEFORE commit, one non-blocking advisory finding R3-001
+  (src/select.ts:77, WARNING, informational) recorded as T15 follow-up
+  nit. Worker fixture bugs fixed in-test during GREEN (content-identical
+  fixtures) — implementation unchanged.
