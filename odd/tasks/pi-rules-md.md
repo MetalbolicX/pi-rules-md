@@ -219,3 +219,6 @@ no code escape hatches.
   lineage review-98a192c2d0d10679: medium tier, review-reliability
   APPROVED and acknowledged (authority burned) BEFORE commit; advisory
   R3-001 (src/state.ts:36, WARNING, informational) banked as T15 nit.
+  Independent verifier PASS (14/14, 240/240, typecheck 0; totality, purity,
+  merge semantics confirmed; no T11/T12 regression risk). Next: T10 shell
+  discovery + production scan adapter.
