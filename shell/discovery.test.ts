@@ -135,7 +135,9 @@ describe("discover — listing and parsing", () => {
 		expect(result.rules.map((rule) => `${rule.source}:${rule.id}`)).toEqual([
 			"project:a",
 			"project:b",
-			"global:a",
+			// Merged-pass id uniqueness: project:a owns the bare stem, so the
+			// colliding global stem suffixes even though ordering is unchanged.
+			"global:a-2",
 			"global:z",
 		]);
 	});
@@ -165,10 +167,10 @@ describe("discover — unique ids per pass", () => {
 		expect(result.rules.map((rule) => rule.id)).toEqual(["a", "a-2", "a-3"]);
 	});
 
-	it("scopes id uniqueness per source: project:a and global:a coexist with bare stems", async () => {
-		// Discovery order is project-first-then-global, and the pinned ordering
-		// contract already treats cross-source stems as independent; the
-		// suffixing therefore resolves collisions within each source only.
+	it("resolves cross-source stem collisions globally: project keeps the bare stem, global suffixes", async () => {
+		// Ids are unique across the merged pass, in pass order (project first,
+		// then global): on a cross-source collision the project rule keeps the
+		// bare stem and the later-source rule gets the -2 suffix.
 		const { deps } = fakeDeps(
 			seed([
 				[`${PROJECT_DIR}/a.md`, file(ruleText("Project A"))],
@@ -176,7 +178,23 @@ describe("discover — unique ids per pass", () => {
 			]),
 		);
 		const result = await discover(deps, new Map(), opts(true));
-		expect(result.rules.map((rule) => `${rule.source}:${rule.id}`)).toEqual(["project:a", "global:a"]);
+		expect(result.rules.map((rule) => `${rule.source}:${rule.id}`)).toEqual(["project:a", "global:a-2"]);
+	});
+
+	it("resolves a three-way cross-source collision as a, a-2, a-3 in pass order", async () => {
+		const { deps } = fakeDeps(
+			seed([
+				[`${PROJECT_DIR}/a.md`, file(ruleText("Project A"))],
+				[`${PROJECT_DIR}/sub/a.md`, file(ruleText("Project Sub A"))],
+				[`${GLOBAL_DIR}/a.md`, file(ruleText("Global A"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), opts(true));
+		expect(result.rules.map((rule) => `${rule.source}:${rule.id}`)).toEqual([
+			"project:a",
+			"project:a-2",
+			"global:a-3",
+		]);
 	});
 
 	it("never produces a suffixed id that collides with another file's bare stem", async () => {

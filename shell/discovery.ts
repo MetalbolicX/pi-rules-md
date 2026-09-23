@@ -12,12 +12,13 @@
  *   re-implements it. Only discovery metadata (path/source) is attached, and
  *   the returned rule id is finalized to the file stem per the discovery
  *   contract (the parser's broader `source:path` id is discovery's to
- *   narrow — see `loadRule`). Ids are unique per source per pass: the first
- *   file with a stem (in sorted-path order) keeps the bare stem, later files
- *   get the smallest free `<stem>-2`, `<stem>-3`, … suffix, skipping any id
- *   already used in the pass (including another file's bare stem). Scoping
- *   is per-source — project and global stems are independent; a cached rule
- *   whose resolved id changes between passes is refreshed, never mutated.
+ *   narrow — see `loadRule`). Ids are unique across the whole merged pass,
+ *   in pass order (project source first, then global; sorted path within
+ *   each source): the first file with a stem keeps the bare stem, later
+ *   files — within or across sources — get the smallest free `<stem>-2`,
+ *   `<stem>-3`, … suffix, skipping any id already used in the pass
+ *   (including another file's bare stem). A cached rule whose resolved id
+ *   changes between passes is refreshed, never mutated.
  * - Production adapters (`nodeDiscoveryDeps`, `tinyglobbyScanner`) wrap
  *   node:fs/promises and tinyglobby; tests inject deterministic fakes.
  *
@@ -103,17 +104,18 @@ const fileStem = (path: string): string => {
 const resolveListed = (dir: string, listed: string): NormalizedPath => normalizedPath(`${dir}/${listed}`);
 
 /**
- * Resolves unique rule ids for one source's sorted listing: the first file
- * with a given stem keeps the bare stem; later files (in sorted-path order)
- * get the smallest free `<stem>-2`, `<stem>-3`, … suffix. A suffix skips ids
- * already used in this pass — including another file's bare stem — so ids
- * are unique within the source and stable across runs. Scoping is
- * per-source: discovery order is project-first-then-global and cross-source
- * stems stay independent (the selection pipeline's content-tie dedupe
- * already prefers project rules).
+ * Resolves unique rule ids across the whole merged discovery pass: the first
+ * file with a given stem — in pass order (project source first, then global;
+ * sorted-path order within each source) — keeps the bare stem; later files,
+ * within their source or across sources, get the smallest free `<stem>-2`,
+ * `<stem>-3`, … suffix, skipping any id already used in the pass (including
+ * another file's bare stem). `used` is shared across the pass and advanced in
+ * order, so on a cross-source collision the project rule keeps the bare stem
+ * and the later-source rule suffixes — deterministic by source order, then
+ * path. (The selection pipeline's content-tie dedupe still prefers project
+ * rules for identical content.)
  */
-const assignSourceIds = (paths: readonly NormalizedPath[]): ReadonlyMap<NormalizedPath, string> => {
-	const used = new Set<string>();
+const assignSourceIds = (paths: readonly NormalizedPath[], used: Set<string>): ReadonlyMap<NormalizedPath, string> => {
 	const ids = new Map<NormalizedPath, string>();
 	for (const abs of paths) {
 		const stem = fileStem(abs);
@@ -240,6 +242,8 @@ export const discover = async (
 	const rules: Rule[] = [];
 	const errors: RuleError[] = [];
 	const nextCache = new Map<NormalizedPath, DiscoveryCacheEntry>();
+	// Shared across the merged pass so ids stay unique project-wide + global-wide.
+	const usedIds = new Set<string>();
 	for (const [dir, source] of sources) {
 		let listed: readonly string[];
 		try {
@@ -255,7 +259,7 @@ export const discover = async (
 			continue;
 		}
 		const paths = listed.map((name) => resolveListed(dir, name)).filter(isRuleFile).sort();
-		const ids = assignSourceIds(paths);
+		const ids = assignSourceIds(paths, usedIds);
 		for (const abs of paths) {
 			const id = ids.get(abs) ?? fileStem(abs);
 			const loaded = await loadRule(deps, cache, nextCache, abs, source, id);
