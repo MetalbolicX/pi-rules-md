@@ -35,8 +35,8 @@ no code escape hatches.
   NormalizedPath) + hand-rolled Result<T,E> with combinators — c083df4
 - [x] 2. `src/frontmatter.ts` — strict parser → Result<Rule, RuleError>;
   fs/readFile injected as parameters — 28a4b74
-- [ ] 3. `src/conditions/` — predicate factories glob/tool/model/branch/always
-  + `combinators.ts` (and/anyOf/not)
+- [x] 3. `src/conditions/` — predicate factories glob/tool/model/branch/always
+  + `combinators.ts` (and/anyOf/not) — df4492a+f49544c (incl. globs:[] fix)
 - [ ] 4. `src/conditions/table.ts` — data registry; unknown-key strict errors
 - [ ] 5. `src/match.ts` — touched-match + exists-match (extension-targeted
   project scan derived from globs)
@@ -81,5 +81,18 @@ no code escape hatches.
   review-reliability lens, budget 200) but reviewer capture unreachable —
   gentle-pi 3.5.1 defects; incidents recorded in Engram
   (incident/gentle-pi-committed-range-start, incident/gentle-pi-capture-route-invisible).
-  Upstream issues filed; implementation PAUSED at user decision until fix.
+  Upstream issues #992/#1154 commented (duplicates confirmed);
+  implementation RESUMED at T3 by user decision — review capture still
+  blocked upstream, no retry until a fixed release; T3 carries no review
+  lineage (disclosed to user).
   Sync note: `gentle-ai sync --agent pi` fixed managed_assets_outdated.
+- T3 df4492a `fix(frontmatter): reject explicitly empty globs` + f49544c
+  `feat(conditions): predicate factories and combinators` — 113/113 tests,
+  typecheck 0, verifier PASS (run on openai-codex/gpt-6-luna per user
+  config change). Decisions: empty globs → invalid-value (field-types
+  stage precedes match-without-globs; globs-absent keeps that code);
+  picomatch ORs negations in arrays → globMatcher splits positive/
+  negative and composes; branch v1 exact equality; and([])=true,
+  anyOf([])=false; @types/picomatch devDep (picomatch 4.0.7 untyped,
+  esModuleInterop off → single sanctioned .default unwrap).
+  version:1.0 nit still deferred to T15.
