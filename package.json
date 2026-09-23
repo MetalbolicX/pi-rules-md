@@ -1,0 +1,31 @@
+{
+	"name": "pi-rules-md",
+	"version": "0.1.0",
+	"description": "Pi extension that discovers markdown rules and injects conditionally matched ones into the system prompt. Functional core, imperative shell.",
+	"type": "module",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"rules",
+		"system-prompt"
+	],
+	"license": "MIT",
+	"author": "MetalbolicX",
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	},
+	"dependencies": {},
+	"devDependencies": {
+		"@earendil-works/pi-coding-agent": "^0.87.1",
+		"@types/node": "^24.0.0",
+		"typescript": "~5.9.0",
+		"vitest": "^1.6.1"
+	}
+}
