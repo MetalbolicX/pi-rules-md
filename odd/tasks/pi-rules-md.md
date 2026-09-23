@@ -63,7 +63,11 @@ no code escape hatches.
   ordered path → tool → model → branch; EvaluationTrace added to
   src/types.ts ({evaluatedAt, results, selection, block}); deterministic,
   no input mutation.
-- [ ] 9. `src/state.ts` — reducer: transition(state, PiEvent) → state
+- [x] 9. `src/state.ts` — reducer: transition(state, StateEvent) → state.
+  Implemented per pinned contract: SessionState {touchedPaths,
+  lastInjectedHash} + StateEvent union (paths_touched first-seen dedupe
+  merge; block_injected hash overwrite; session_compact clears hash keeps
+  paths; session_reset → initialState); total, pure, unknown-kind no-op.
 - [ ] 10. `shell/discovery.ts` — global ~/.pi/agent/rules/ + project .pi/rules/,
   trust gate, mtime cache
 - [ ] 11. `shell/collectors.ts` — pi events → Signals (typed fake-event tests)
@@ -209,3 +213,9 @@ no code escape hatches.
   reconfirmed). Independent verifier PASS (24/24, 226/226, typecheck 0;
   contract fidelity, immutability, determinism confirmed; no severe issue,
   no T9-T12 regression). Next: T9 state reducer.
+- T9 `feat(state): session state reducer for injection hysteresis` —
+  strict TDD RED (missing ./state.ts module), GREEN 14/14; full 240/240
+  (226 pre-existing unchanged), typecheck 0. Native workspace review
+  lineage review-98a192c2d0d10679: medium tier, review-reliability
+  APPROVED and acknowledged (authority burned) BEFORE commit; advisory
+  R3-001 (src/state.ts:36, WARNING, informational) banked as T15 nit.
