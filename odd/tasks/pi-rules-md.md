@@ -261,5 +261,8 @@ no code escape hatches.
   already adjudicated) banked T15. One consent-binding-stale round
   (retained-selection lag after worker run; re-inspect + immediate START
   resolved). Worker verified real pi event names from the SDK types.
-  Independent verifier pending (runs after commit per committed-range
-  assess fallback). Next: T12 injection.
+  Independent verifier PASS (22/22, 278/278, typecheck 0; structural
+  fidelity against SDK types confirmed). Follow-up banked T15: null/
+  undefined event would throw on event.type deref (real pi events are
+  objects; totality claim narrower than implementation). Next: T12
+  injection.
