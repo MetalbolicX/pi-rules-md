@@ -83,7 +83,16 @@ no code escape hatches.
   tool_result carrying toolName + input args — tool_execution_end carries
   only a result payload, not args); pure total piEventToStateEvents;
   paths relativized against cwd; unknown shapes → [].
-- [ ] 12. `shell/injection.ts` — sections mutation + hash hysteresis
+- [x] 12. `shell/injection.ts` — sections mutation + hash hysteresis.
+  Implemented per pinned contract with ONE ADJUDICATED DEVIATION: pi's
+  real systemPromptOptions.sections is Record<string, string> (SystemPrompt-
+  Sections, dist/core/system-prompt.d.ts) NOT a section array — worker's
+  verify-first clause governed; PromptSections mirror + key-based
+  applyInjection/removeInjection (assignment/delete on sectionId key).
+  Pure injectionDecision (patch/none/remove 4-quadrant table); new
+  block_removed StateEvent in src/state.ts (clears hash, keeps paths).
+  T13 protocol documented: patch → block_injected; remove → block_removed;
+  none → no event.
 - [ ] 13. `index.ts` wiring + `/rules` command + EvaluationLog
 - [ ] 14. Dogfood: real rules in this environment + marker-token probes
   (section appears, patch discipline, /rules report)
@@ -266,3 +275,10 @@ no code escape hatches.
   undefined event would throw on event.type deref (real pi events are
   objects; totality claim narrower than implementation). Next: T12
   injection.
+- T12 `feat(shell): inject rules section with hash hysteresis` — strict
+  TDD RED (missing ./injection.ts + 2 failing block_removed state tests),
+  GREEN 13/13 + 17/17; full 294/294 (278 pre-existing + 16 new), typecheck
+  0. Native workspace review lineage review-67114e7c967aae59: medium
+  tier, review-reliability APPROVED and acknowledged (authority burned)
+  BEFORE commit, NO advisory findings. Independent verifier pending (runs
+  after commit per committed-range assess fallback). Next: T13 wiring.

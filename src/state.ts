@@ -24,12 +24,15 @@ export interface SessionState {
 
 /**
  * Session-relevant state events, distilled from pi lifecycle and tool events
- * by the collectors. The union is open at runtime: unknown kinds (a future pi
+ * by the collectors (paths_touched, session_*) plus injection outcomes
+ * emitted by the shell wiring (block_injected, block_removed). The union is
+ * open at runtime: unknown kinds (a future pi
  * version) must fall through to a no-op, not an error.
  */
 export type StateEvent =
 	| { readonly type: "paths_touched"; readonly paths: readonly NormalizedPath[] }
 	| { readonly type: "block_injected"; readonly contentHash: string }
+	| { readonly type: "block_removed" }
 	| { readonly type: "session_compact" }
 	| { readonly type: "session_reset" };
 
@@ -56,6 +59,10 @@ export const transition = (state: SessionState, event: StateEvent): SessionState
 		}
 		case "block_injected":
 			return { ...state, lastInjectedHash: event.contentHash };
+		case "block_removed":
+			// Section removed from pi: clear the hash (touched paths stay) so the
+			// same block patches again after a re-activation.
+			return state.lastInjectedHash === undefined ? state : { ...state, lastInjectedHash: undefined };
 		case "session_compact":
 			// Keep touched paths: post-compact re-injection is the point.
 			return { ...state, lastInjectedHash: undefined };

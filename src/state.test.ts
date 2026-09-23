@@ -99,6 +99,36 @@ describe("transition — block_injected", () => {
 	});
 });
 
+describe("transition — block_removed", () => {
+	it("clears the injected hash but keeps touched paths", () => {
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123" };
+		const next = transition(state, { type: "block_removed" });
+		expect(next).toEqual({ touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined });
+	});
+
+	it("returns the value-equal, shared state when the hash is already undefined", () => {
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined };
+		const next = transition(state, { type: "block_removed" });
+		expect(next).toBe(state);
+		expect(next).toEqual(state);
+	});
+
+	it("never mutates deep-frozen state or event inputs", () => {
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123" };
+		const event: StateEvent = { type: "block_removed" };
+		deepFreeze(state);
+		deepFreeze(event);
+
+		const next = transition(state, event);
+
+		expect(Object.isFrozen(state)).toBe(true);
+		expect(Object.isFrozen(event)).toBe(true);
+		expect(state.lastInjectedHash).toBe("abc123");
+		expect(next.lastInjectedHash).toBeUndefined();
+		expect(next.touchedPaths).toEqual([normalizedPath("src/a.ts")]);
+	});
+});
+
 describe("transition — session_compact", () => {
 	it("clears the hash but keeps touched paths for post-compact re-injection", () => {
 		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123" };
