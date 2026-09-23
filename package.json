@@ -11,6 +11,13 @@
 	],
 	"license": "MIT",
 	"author": "MetalbolicX",
+	"files": [
+		"index.ts",
+		"src",
+		"shell",
+		"README.md",
+		"RULE-SPEC.md"
+	],
 	"pi": {
 		"extensions": [
 			"./index.ts"

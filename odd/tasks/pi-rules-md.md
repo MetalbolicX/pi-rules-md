@@ -152,7 +152,30 @@ no code escape hatches.
   commit). One transcription-corruption round on collectBinding relay
   (bogus --pad token; exact re-relay accepted). Probes A/B/C/G PASS;
   compact + /rules render deferred to TUI residuals.
-- [ ] 15. RULE-SPEC.md + README + property tests (fast-check) + perf guard
+- [x] 15. RULE-SPEC.md + README + property tests + perf guard
+  COMPLETE in three work units. W1 hardening 29236a3 + e4cb517
+  (discovery totality via source-unreadable; GLOBAL id uniqueness;
+  collectors null guard; render blank-line normalization; reviews burned,
+  verifier FAIL→fix→PASS). W2 property+perf 74d5802 (vendored mulberry32
+  harness — fast-check uninstalled and pnpm add forbidden; 18 property
+  tests; perf guard 38.6ms vs 2000ms; review burned; verifier PASS).
+  W3 docs+pack (parent inline, passive docs/metadata — no review cycle
+  per entry rule): RULE-SPEC.md normative v1 format (verified against
+  parser: enforcement = enforce|recommend|inform, INERT in v1;
+  no-activation-condition; match-without-globs only on EXPLICIT match;
+  version strict 1); README rewritten (how it works, quick start, /rules,
+  trust, dev); package.json files whitelist (index.ts, src, shell, docs).
+  PACK PROBE PASS: pnpm pack → tarball ships exactly the whitelist →
+  extracted to /tmp with deps symlinked (pnpm install forbidden — simulates
+  installed tree) → pi --approve --no-extensions -e <packed>/index.ts →
+  rule discovered, injected, marker PACK-OK-5591 in reply, exit 0
+  (one ln-into-dir footgun fixed en route). Final sweep 343/343 +
+  typecheck 0.
+  Remaining banked follow-ups (post-v1 backlog): stat non-ENOENT
+  silent-skip; source-unreadable never cached; branch condition dead
+  (no pi source); enforcement inert; `at` undefined-element edge;
+  budget-drop suffix assertion; whole-seed replay assertion; interactive
+  TUI residuals (/rules render, real compaction).
   PLANNED AS THREE WORK UNITS (parent-pinned):
   W1 HARDENING (strict TDD; shell/discovery.ts+test, shell/collectors.ts+test,
   src/render.ts+test): (a) discover() totality — deps.listRuleFiles
