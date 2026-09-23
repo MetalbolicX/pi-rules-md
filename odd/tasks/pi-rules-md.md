@@ -33,8 +33,8 @@ no code escape hatches.
 - [x] 1. `src/types.ts` + `src/result.ts` — domain data (Rule, EvaluationContext,
   MatchResult discriminated unions, Selection, InjectionBlock, branded RuleId/
   NormalizedPath) + hand-rolled Result<T,E> with combinators — c083df4
-- [ ] 2. `src/frontmatter.ts` — strict parser → Result<Rule, RuleError>;
-  fs/readFile injected as parameters
+- [x] 2. `src/frontmatter.ts` — strict parser → Result<Rule, RuleError>;
+  fs/readFile injected as parameters — 28a4b74
 - [ ] 3. `src/conditions/` — predicate factories glob/tool/model/branch/always
   + `combinators.ts` (and/anyOf/not)
 - [ ] 4. `src/conditions/table.ts` — data registry; unknown-key strict errors
@@ -71,3 +71,15 @@ no code escape hatches.
   default "both" + priority default 0 materialized at parse time (T2); MatchResult
   discriminant field `matched`; `match` combinator takes `{ ok, err }` arms;
   `unwrapOrThrow(error => Error)` optional mapper.
+- T2 28a4b74 `feat(core): strict frontmatter parser with injected fs` — 81/81
+  tests, typecheck 0, verifier PASS. Decisions: defaults materialized at parse
+  (enforcement default "inform"); description required; ≥1 activation condition
+  required; YAML strict schema (anchors/aliases/duplicates rejected); `yaml`
+  ^2.9.1 only new runtime dep. Known nits (deferred): `globs: []` + other
+  condition slips past match-without-globs; `version: 1.0` accepted as 1.
+  Native review: lineage review-4bcbc28fdc992857 frozen (medium tier,
+  review-reliability lens, budget 200) but reviewer capture unreachable —
+  gentle-pi 3.5.1 defects; incidents recorded in Engram
+  (incident/gentle-pi-committed-range-start, incident/gentle-pi-capture-route-invisible).
+  Upstream issues filed; implementation PAUSED at user decision until fix.
+  Sync note: `gentle-ai sync --agent pi` fixed managed_assets_outdated.
