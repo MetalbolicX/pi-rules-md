@@ -76,7 +76,13 @@ no code escape hatches.
   stem post-parse (parser owns validation); missing dir → empty; vanished
   mid-scan → skip; mtime cache reuses rule OR error. Production:
   nodeDiscoveryDeps() + tinyglobbyScanner (ignore .git/node_modules).
-- [ ] 11. `shell/collectors.ts` — pi events → Signals (typed fake-event tests)
+- [x] 11. `shell/collectors.ts` — pi events → StateEvents. Implemented
+  per pinned contract: PiEventShape LOCAL structural union mirroring REAL
+  pi 0.87 names (verified in dist/core/extensions/types.d.ts:
+  session_compact, session_before_switch, session_before_fork,
+  tool_result carrying toolName + input args — tool_execution_end carries
+  only a result payload, not args); pure total piEventToStateEvents;
+  paths relativized against cwd; unknown shapes → [].
 - [ ] 12. `shell/injection.ts` — sections mutation + hash hysteresis
 - [ ] 13. `index.ts` wiring + `/rules` command + EvaluationLog
 - [ ] 14. Dogfood: real rules in this environment + marker-token probes
@@ -246,3 +252,14 @@ no code escape hatches.
   banked T15. Independent verifier PASS (16/16, 256/256, typecheck 0);
   disclosures confirmed as follow-ups — non-ENOENT conflation flagged the
   highest-priority T15 hardening item. Next: T11 shell collectors.
+- T11 `feat(shell): map pi events to state events` — strict TDD RED
+  (missing ./collectors.ts), GREEN 22/22 (typed fake events only); full
+  278/278 (256 pre-existing unchanged), typecheck 0. Native workspace
+  review lineage review-988e9d2477ba545d: medium tier, review-reliability
+  APPROVED and acknowledged (authority burned) BEFORE commit; advisory
+  R3-001 (shell/collectors.ts:46-47, informational — the ??-chain region,
+  already adjudicated) banked T15. One consent-binding-stale round
+  (retained-selection lag after worker run; re-inspect + immediate START
+  resolved). Worker verified real pi event names from the SDK types.
+  Independent verifier pending (runs after commit per committed-range
+  assess fallback). Next: T12 injection.
