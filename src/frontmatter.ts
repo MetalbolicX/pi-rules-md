@@ -183,6 +183,13 @@ export const parseRule = (raw: string, meta: RuleMeta): Result<Rule, RuleError> 
 		if (parsedGlobs === null) {
 			return err(invalidValue("globs", "a string or an array of strings", file));
 		}
+		// An explicitly empty array is never a valid trigger, and must not slip
+		// past `match-without-globs` (which only checks absence) leaving a dead
+		// `match` key. This runs in the field-types stage, which precedes the
+		// match-without-globs check below.
+		if (parsedGlobs.length === 0) {
+			return err(invalidValue("globs", "a non-empty string or a non-empty array of strings", file));
+		}
 		globs = parsedGlobs;
 	}
 

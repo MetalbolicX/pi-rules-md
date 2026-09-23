@@ -265,6 +265,26 @@ describe("parseRule — strict validation", () => {
 	});
 });
 
+describe("parseRule — explicitly empty globs", () => {
+	it("rejects globs: [] even when another activation condition is present", () => {
+		const error = errOf(parseRule(fm("description: x\nversion: 1\nglobs: []\ntools: [edit]"), projectMeta));
+		expect(error.code).toBe("invalid-value");
+		expect(error.message).toContain("globs");
+	});
+
+	it("rejects match with globs: [] as invalid-value (field-types stage precedes match-without-globs)", () => {
+		const error = errOf(parseRule(fm("description: x\nversion: 1\nglobs: []\nmatch: touched"), projectMeta));
+		expect(error.code).toBe("invalid-value");
+		expect(error.message).toContain("globs");
+	});
+
+	it("keeps match-without-globs for globs-absent even when another activation condition is present", () => {
+		const error = errOf(parseRule(fm("description: x\nversion: 1\nmatch: touched\ntools: [edit]"), projectMeta));
+		expect(error.code).toBe("match-without-globs");
+		expect(error.message).toContain("match");
+	});
+});
+
 describe("readRuleFile", () => {
 	it("reads through the injected readFile and parses the rule", async () => {
 		const requested: string[] = [];
