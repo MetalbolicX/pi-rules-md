@@ -243,4 +243,6 @@ no code escape hatches.
   Worker disclosures adjudicated: id=file-stem override honored (stem
   collision across subdirs banked T15); listRuleFiles without ignore
   banked T15; non-ENOENT stat/read failures conflated with vanished-skip
-  banked T15.
+  banked T15. Independent verifier PASS (16/16, 256/256, typecheck 0);
+  disclosures confirmed as follow-ups — non-ENOENT conflation flagged the
+  highest-priority T15 hardening item. Next: T11 shell collectors.
