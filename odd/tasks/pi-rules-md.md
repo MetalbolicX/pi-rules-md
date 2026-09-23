@@ -30,9 +30,9 @@ no code escape hatches.
 
 ## Tasks (strict TDD, in order)
 
-- [ ] 1. `src/types.ts` + `src/result.ts` — domain data (Rule, EvaluationContext,
+- [x] 1. `src/types.ts` + `src/result.ts` — domain data (Rule, EvaluationContext,
   MatchResult discriminated unions, Selection, InjectionBlock, branded RuleId/
-  NormalizedPath) + hand-rolled Result<T,E> with combinators
+  NormalizedPath) + hand-rolled Result<T,E> with combinators — c083df4
 - [ ] 2. `src/frontmatter.ts` — strict parser → Result<Rule, RuleError>;
   fs/readFile injected as parameters
 - [ ] 3. `src/conditions/` — predicate factories glob/tool/model/branch/always
@@ -66,4 +66,8 @@ no code escape hatches.
 
 ## Evidence log
 
-- (pending — each task closes with a Conventional Commit recorded here)
+- T1 c083df4 `feat(core): add domain types and Result type` — 41/41 tests,
+  typecheck 0, verifier PASS (4 files, only src/ touched). Decisions: match
+  default "both" + priority default 0 materialized at parse time (T2); MatchResult
+  discriminant field `matched`; `match` combinator takes `{ ok, err }` arms;
+  `unwrapOrThrow(error => Error)` optional mapper.
