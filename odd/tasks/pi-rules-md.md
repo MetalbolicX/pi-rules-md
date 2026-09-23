@@ -38,15 +38,9 @@ no code escape hatches.
 - [x] 3. `src/conditions/` — predicate factories glob/tool/model/branch/always
   + `combinators.ts` (and/anyOf/not) — df4492a+f49544c (incl. globs:[] fix)
 - [x] 4. `src/conditions/table.ts` — data registry; unknown-key strict errors — ec18878
-- [ ] 5. `src/match.ts` — touched-match + exists-match (extension-targeted
-  project scan derived from globs). In progress; delegated to gentle-ai-worker
-  (multi-file write: implementation, tests, dependency manifest/lock). Strict
-  TDD, `pnpm vitest run`, `pnpm typecheck`; no commit by worker. Review/commit
-  and task checkoff remain with parent. Parent prepared tinyglobby ^0.2.17
-  in package.json/pnpm-lock.yaml; pnpm add returned ERR_PNPM_IGNORED_BUILDS
-  after materialization due to pre-existing workspace allowBuilds placeholders.
-  Read-only incident diagnosis confirmed package and dependencies installed;
-  no build approval or further installer run needed for T5 tests.
+- [x] 5. `src/match.ts` — touched-match + exists-match; injected
+  extension-targeted scan seam derived from globs — 20b5632. Production
+  tinyglobby adapter/ignore policy remains for T10 shell wiring.
 - [ ] 6. `src/select.ts` — dedupe(content hash) → sort(priority) → token
   budget fold (port opencode-rules-md tests where applicable)
 - [ ] 7. `src/render.ts` — strong imperative framing + per-rule trigger
@@ -62,6 +56,14 @@ no code escape hatches.
   (section appears, patch discipline, /rules report)
 - [ ] 15. RULE-SPEC.md + README + property tests (fast-check) + perf guard
   (500 rules × 50 paths under budget)
+
+## Delivery strategy
+
+- `ask-on-risk` resolved by the user to `stacked-to-main` PR slices; no
+  push/PR/merge authorized. Running authored diff from main at T5:
+  2710 additions + 10 deletions = 2720 lines (including tests/docs).
+  Work-unit commits are review boundaries; slice composition/size exceptions
+  for cohesive units exceeding ~400 lines remain pending PR preparation.
 
 ## Acceptance
 
@@ -136,3 +138,15 @@ no code escape hatches.
   against Engram observation 6951; prior Engram mirror was a summary, so it
   is being replaced by the full recovery document. Branch feat/pi-rules-md
   clean at d3114b4 before the T5 writer.
+- T5 20b5632 `feat(match): evaluate touched and existing rule paths` —
+  strict TDD RED (missing `./match.ts` module), GREEN 19/19,
+  TRIANGULATE negation/modes/reasons/scan failures; full 173/173 and
+  typecheck 0. Independent verifier PASS (19/19, 173/173, typecheck 0,
+  diff --check, clean tree). Native workspace review lineage
+  review-8b73e41cc0029629: medium tier, review-reliability approved and
+  acknowledged (authority burned) BEFORE commit. Post-commit committed-
+  range ASSESS returned unassessable/schema-incompatible (known #992);
+  separate verifier ran per high-risk fallback. Dependency tinyglobby
+  ^0.2.17 installed despite pnpm add exit 1 on ignored unrelated builds;
+  adapter deferred to T10. No real filesystem/ignore integration tested
+  yet; T10 must cover that behavior. Next: T6 selection pipeline.
