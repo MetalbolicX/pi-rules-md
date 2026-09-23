@@ -93,7 +93,16 @@ no code escape hatches.
   block_removed StateEvent in src/state.ts (clears hash, keeps paths).
   T13 protocol documented: patch → block_injected; remove → block_removed;
   none → no event.
-- [ ] 13. `index.ts` wiring + `/rules` command + EvaluationLog
+- [x] 13. `index.ts` wiring + `/rules` command + EvaluationLog
+  COMPLETED per pinned contract with two parent adjudications mid-task:
+  (1) test placement RELOCATED to test/index.test.ts (vitest include
+  covers src/**, shell/**, test/** only — no config churn); (2) rules
+  directories ADJUDICATED: global ~/.pi/agent/rules, project <cwd>/.pi/rules.
+  toolNames real source found + approved: event.systemPromptOptions.
+  selectedTools (BeforeAgentStartEvent); model via ctx.model?.id; branch
+  undefined (no git source on ctx — disclosed v1 gap). Worker stopped
+  mid-task with interaction_required on the placement question (correct
+  behavior); resumed via subagent_continue.
 - [ ] 14. Dogfood: real rules in this environment + marker-token probes
   (section appears, patch discipline, /rules report)
 - [ ] 15. RULE-SPEC.md + README + property tests (fast-check) + perf guard
@@ -280,7 +289,13 @@ no code escape hatches.
   GREEN 13/13 + 17/17; full 294/294 (278 pre-existing + 16 new), typecheck
   0. Native workspace review lineage review-67114e7c967aae59: medium
   tier, review-reliability APPROVED and acknowledged (authority burned)
-  BEFORE commit, NO advisory findings. Independent verifier PASS (13/13,
-  17/17, 294/294, typecheck 0; Record mirror confirmed correct against SDK
-  declarations; decision/mutation/reducer/hysteresis verified). Next: T13
-  wiring.
+  BEFORE commit, NO advisory findings. Next: T14 dogfood.
+- T13 `feat(shell): wire extension entry point with /rules command` —
+  strict TDD RED×2 (missing pipeline module; stub index not exporting
+  createRulesExtension 9/9 failing), GREEN 7/7 + 9/9; full 310/310
+  (294 pre-existing + 16 new), typecheck 0; grep-audited no runtime pi
+  import (sole reference: `import type { ExtensionAPI }` index.ts:17).
+  Native workspace review lineage review-67d59cfee88ba9d2: medium tier
+  (850 changed lines), review-reliability APPROVED, acknowledged (burned)
+  BEFORE commit, NO findings. Independent verifier pending (runs after
+  commit per committed-range assess fallback). Next: T14 dogfood.
