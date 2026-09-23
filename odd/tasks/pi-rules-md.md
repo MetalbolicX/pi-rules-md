@@ -206,4 +206,6 @@ no code escape hatches.
   findings. One parent relay slip during capture (duplicated JSON fragment
   in artifactSubject) — facade rejected it as invalid JSON before reaching
   the provider; exact re-relay accepted (transcription failure mode
-  reconfirmed).
+  reconfirmed). Independent verifier PASS (24/24, 226/226, typecheck 0;
+  contract fidelity, immutability, determinism confirmed; no severe issue,
+  no T9-T12 regression). Next: T9 state reducer.
