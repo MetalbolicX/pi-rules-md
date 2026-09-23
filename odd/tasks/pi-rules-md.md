@@ -46,8 +46,14 @@ no code escape hatches.
   keeps FIRST occurrence (sha-256 of content via node:crypto), sort
   priority DESC stable on ties, fold stops at the first non-fitting rule
   and drops the remainder, token estimate ceil(chars/4).
-- [ ] 7. `src/render.ts` — strong imperative framing + per-rule trigger
-  metadata; golden-file tests
+- [x] 7. `src/render.ts` — strong imperative framing + per-rule trigger
+  metadata; golden-file tests. Implemented per pinned contract: RenderEntry
+  pairs in selection order, renderSection → InjectionBlock | undefined
+  (undefined iff empty), sectionId "pi-rules-md", sha-256 contentHash,
+  `# Rules` header + imperative framing, per-rule `## <description>` +
+  `> Triggered by:` only when reasons exist, content verbatim, `---`
+  separators, single trailing newline; static goldens in
+  src/render.golden/ compared byte-exactly.
 - [ ] 8. `src/engine.ts` — evaluate pipeline + immutable EvaluationTrace
 - [ ] 9. `src/state.ts` — reducer: transition(state, PiEvent) → state
 - [ ] 10. `shell/discovery.ts` — global ~/.pi/agent/rules/ + project .pi/rules/,
@@ -169,3 +175,13 @@ no code escape hatches.
   193/193, typecheck 0; no severe bug, no T8 regression risk; R3-001 noted
   informational). Running authored diff from main: 3058 additions + 13
   deletions = 3071 lines. Next: T7 rendering.
+- T7 `feat(render): render selected rules into one injection section` —
+  strict TDD RED (missing ./render.ts module), GREEN 9/9; full 202/202
+  (193 pre-existing unchanged), typecheck 0. renderSection returns
+  InjectionBlock | undefined; three static goldens compared byte-exactly
+  (single rule, all five reason kinds + separator, no-reasons omission).
+  Native workspace review lineage review-24c9e6bc9d8f7d32: medium tier,
+  review-reliability APPROVED and acknowledged (authority burned) BEFORE
+  commit; advisory R3-001 (src/render.ts:78, WARNING, informational;
+  verbatim content with trailing newline double-newlines before separator)
+  recorded as T15 nit alongside the worker's identical flag.
