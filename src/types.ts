@@ -87,7 +87,7 @@ export interface Rule {
 	readonly content: string;
 }
 
-/** Machine-readable error codes for rule parsing failures. */
+/** Machine-readable error codes for rule parsing and discovery failures. */
 export type RuleErrorCode =
 	| "missing-frontmatter"
 	| "yaml-syntax"
@@ -97,12 +97,14 @@ export type RuleErrorCode =
 	| "no-activation-condition"
 	| "match-without-globs"
 	| "invalid-version"
-	| "read-failure";
+	| "read-failure"
+	| "source-unreadable";
 
 /**
- * Why a rule file could not be parsed into a Rule. Discriminated by `code`;
- * `message` is human-readable and `file` optionally names the source file.
- * Parsing is total: every failure is one of these values, never a throw.
+ * Why a rule file (or a whole rules source) could not be loaded. Discriminated
+ * by `code`; `message` is human-readable and `file` optionally names the file
+ * — or, for the source-level `source-unreadable`, the directory. Loading is
+ * total: every failure is one of these values, never a throw.
  */
 export type RuleError =
 	| { readonly code: "missing-frontmatter"; readonly message: string; readonly file?: string }
@@ -113,7 +115,8 @@ export type RuleError =
 	| { readonly code: "no-activation-condition"; readonly message: string; readonly file?: string }
 	| { readonly code: "match-without-globs"; readonly message: string; readonly file?: string }
 	| { readonly code: "invalid-version"; readonly message: string; readonly file?: string }
-	| { readonly code: "read-failure"; readonly message: string; readonly file?: string };
+	| { readonly code: "read-failure"; readonly message: string; readonly file?: string }
+	| { readonly code: "source-unreadable"; readonly message: string; readonly file?: string };
 
 /** Snapshot of everything conditions may look at during an evaluation. */
 export interface EvaluationContext {

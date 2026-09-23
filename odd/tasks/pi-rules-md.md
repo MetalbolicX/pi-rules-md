@@ -153,6 +153,38 @@ no code escape hatches.
   (bogus --pad token; exact re-relay accepted). Probes A/B/C/G PASS;
   compact + /rules render deferred to TUI residuals.
 - [ ] 15. RULE-SPEC.md + README + property tests (fast-check) + perf guard
+  PLANNED AS THREE WORK UNITS (parent-pinned):
+  W1 HARDENING (strict TDD; shell/discovery.ts+test, shell/collectors.ts+test,
+  src/render.ts+test): (a) discover() totality — deps.listRuleFiles
+  rejection → ruleError("source-unreadable", msg, dir) error entry, source
+  contributes no rules, other sources continue (kills the before_agent_start
+  rethrow path; verifier's highest-priority item); readFile rejection →
+  "unreadable-rule" file error entry. (b) Unique ids per discovery pass:
+  file-stem collision across subdirs → deterministic suffix -2,-3… in sorted
+  listing order (stable). (c) collectors: null/undefined event → [] (guard
+  before event.type deref). (d) render R3-001: rule body trailing blank
+  lines normalized so entry separators never produce double blank lines;
+  static goldens updated accordingly. (e) DECIDED no-change: version stays
+  strictly === 1 (documented in RULE-SPEC; 1.0 rejected by design).
+  W2 PROPERTY+PERF (test-only; test/support/seeded.ts + property test
+  files + perf guard test): fast-check NOT installed and pnpm add is
+  forbidden → vendored mini harness (seeded PRNG mulberry32, ~200 cases,
+  shrink-less, deterministic seeds). Invariants: parser roundtrip on
+  generated valid docs; unknown-key/invalid-version rejection stability;
+  matchRules determinism + scan-pattern dedupe; select: dedupe keeps
+  first, priority DESC stable, budget fold never exceeds budget before
+  first non-fit stop; render byte-stable for equal input; reducer: double
+  paths_touched fold = single, compact keeps paths, reset clears all,
+  unknown no-op. PERF GUARD: 300 rules × 300 paths through
+  deriveScanPatterns+matchRules+select+render (picomatch-driven scan fake)
+  under a generous wall-time bound (target < 1s, assert 2× margin).
+  W3 DOCS+PACK (parent inline): RULE-SPEC.md (format v1: keys, globs,
+  match modes, conditions, precedence, budget, errors, id uniqueness,
+  version strictness, dirs, trust); README (install, dirs, /rules, trust,
+  example rules); package.json files whitelist; pack probe: pnpm pack →
+  extract to scratch → symlink 3 runtime deps (no pnpm install allowed) →
+  pi --extension <extracted>/index.ts -p smoke exit 0; final acceptance
+  sweep + docs commit.
   (500 rules × 50 paths under budget)
 
 ## Delivery strategy

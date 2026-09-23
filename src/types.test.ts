@@ -132,6 +132,17 @@ describe("RuleError", () => {
 		expect(error.code).toBe("yaml-syntax");
 	});
 
+	it("accepts the source-unreadable code with a directory as file context", () => {
+		const error: RuleError = {
+			code: "source-unreadable",
+			message: "failed to list rules source: EACCES",
+			file: "/home/u/.pi/agent/rules",
+		};
+		expect(error.code).toBe("source-unreadable");
+		expect(error.message).toContain("EACCES");
+		expect(error.file).toBe("/home/u/.pi/agent/rules");
+	});
+
 	it("narrows exhaustively on the code discriminant", () => {
 		const codeOf = (error: RuleError): RuleErrorCode => {
 			switch (error.code) {
@@ -144,10 +155,12 @@ describe("RuleError", () => {
 				case "match-without-globs":
 				case "invalid-version":
 				case "read-failure":
+				case "source-unreadable":
 					return error.code;
 			}
 		};
 		expect(codeOf({ code: "read-failure", message: "x" })).toBe("read-failure");
+		expect(codeOf({ code: "source-unreadable", message: "x" })).toBe("source-unreadable");
 		expectTypeOf(codeOf({ code: "invalid-version", message: "x" })).toEqualTypeOf<RuleErrorCode>();
 	});
 });

@@ -29,6 +29,12 @@ const ruleText = (description: string): string =>
 /** Text guaranteed to fail parsing (no frontmatter block at byte 0). */
 const brokenText = "no frontmatter block here\n";
 
+/**
+ * ENOENT-shaped cause, mirroring real node:fs errors (which carry `code`).
+ * Plain errors model genuine failures (permissions, wrong type), not absence.
+ */
+const enoent = (path: string): Error => Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+
 interface FakeFile {
 	content: string;
 	mtimeMs: number;
@@ -60,7 +66,7 @@ const fakeDeps = (files: Map<string, FakeFile>) => {
 			callLog.stat.push(path);
 			const stored = files.get(path);
 			if (stored === undefined) {
-				throw new Error(`ENOENT: ${path}`);
+				throw enoent(path);
 			}
 			return { mtimeMs: stored.mtimeMs };
 		},
@@ -68,7 +74,7 @@ const fakeDeps = (files: Map<string, FakeFile>) => {
 			callLog.read.push(path);
 			const stored = files.get(path);
 			if (stored === undefined) {
-				throw new Error(`ENOENT: ${path}`);
+				throw enoent(path);
 			}
 			return stored.content;
 		},
@@ -135,6 +141,76 @@ describe("discover — listing and parsing", () => {
 	});
 });
 
+describe("discover — unique ids per pass", () => {
+	it("suffixes same-stem files within a source: first sorted keeps the stem, later get -2", async () => {
+		const { deps } = fakeDeps(
+			seed([
+				[`${PROJECT_DIR}/sub/a.md`, file(ruleText("Sub A"))],
+				[`${PROJECT_DIR}/a.md`, file(ruleText("Root A"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), opts(true));
+		expect(result.rules.map((rule) => rule.id)).toEqual(["a", "a-2"]);
+	});
+
+	it("suffixes a three-way stem collision deterministically (-2, -3) in sorted-path order", async () => {
+		const { deps } = fakeDeps(
+			seed([
+				[`${PROJECT_DIR}/c/a.md`, file(ruleText("C"))],
+				[`${PROJECT_DIR}/a.md`, file(ruleText("Root"))],
+				[`${PROJECT_DIR}/b/a.md`, file(ruleText("B"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), opts(true));
+		expect(result.rules.map((rule) => rule.id)).toEqual(["a", "a-2", "a-3"]);
+	});
+
+	it("scopes id uniqueness per source: project:a and global:a coexist with bare stems", async () => {
+		// Discovery order is project-first-then-global, and the pinned ordering
+		// contract already treats cross-source stems as independent; the
+		// suffixing therefore resolves collisions within each source only.
+		const { deps } = fakeDeps(
+			seed([
+				[`${PROJECT_DIR}/a.md`, file(ruleText("Project A"))],
+				[`${GLOBAL_DIR}/deep/a.md`, file(ruleText("Global A"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), opts(true));
+		expect(result.rules.map((rule) => `${rule.source}:${rule.id}`)).toEqual(["project:a", "global:a"]);
+	});
+
+	it("never produces a suffixed id that collides with another file's bare stem", async () => {
+		// Sorted paths: a-2.md < a.md < sub/a.md. The bare "a-2" is taken, so
+		// the colliding "a" stem must skip to "a-3" instead of duplicating it.
+		const { deps } = fakeDeps(
+			seed([
+				[`${PROJECT_DIR}/a-2.md`, file(ruleText("A two"))],
+				[`${PROJECT_DIR}/a.md`, file(ruleText("A"))],
+				[`${PROJECT_DIR}/sub/a.md`, file(ruleText("Sub A"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), opts(true));
+		expect(result.rules.map((rule) => rule.id)).toEqual(["a-2", "a", "a-3"]);
+	});
+
+	it("refreshes a cached rule's id when a later pass makes it collide", async () => {
+		const store = seed([[`${PROJECT_DIR}/sub/a.md`, file(ruleText("Sub A"))]]);
+		const { deps } = fakeDeps(store);
+		const first = await discover(deps, new Map(), opts(true));
+		expect(first.rules.map((rule) => rule.id)).toEqual(["a"]);
+
+		store.set(`${PROJECT_DIR}/a.md`, file(ruleText("Root A"), 1));
+		const second = await discover(deps, first.cache, opts(true));
+		expect(second.rules.map((rule) => [rule.id, rule.description])).toEqual([
+			["a", "Root A"],
+			["a-2", "Sub A"],
+		]);
+		// The unchanged first-sorted file keeps its cache entry object; only
+		// the id-changing rule gets a fresh entry.
+		expect(second.cache.get(normalizedPath(`${PROJECT_DIR}/a.md`))).toBeDefined();
+	});
+});
+
 describe("discover — trust gate", () => {
 	it("never lists or reads the project directory when untrusted, global still works", async () => {
 		const { deps, callLog } = fakeDeps(
@@ -157,6 +233,53 @@ describe("discover — missing directories", () => {
 		expect(result.rules).toEqual([]);
 		expect(result.errors).toEqual([]);
 		expect(result.cache.size).toBe(0);
+	});
+});
+
+describe("discover — source and read failures", () => {
+	it("collects source-unreadable for a rejected listRuleFiles; the other source continues", async () => {
+		const deps: DiscoveryDeps = {
+			listRuleFiles: async (dir) => {
+				if (dir === PROJECT_DIR) {
+					throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+				}
+				return ["g.md"];
+			},
+			stat: async () => ({ mtimeMs: 1 }),
+			readFile: async () => ruleText("Global G"),
+		};
+		const result = await discover(deps, new Map(), opts(true));
+
+		expect(result.rules.map((rule) => rule.id)).toEqual(["g"]);
+		expect(result.errors).toEqual([
+			{ code: "source-unreadable", message: expect.stringContaining("EACCES"), file: PROJECT_DIR },
+		]);
+		// The unreadable source contributed no cache entries.
+		expect([...result.cache.keys()]).toEqual([normalizedPath(`${GLOBAL_DIR}/g.md`)]);
+	});
+
+	it("collects read-failure for a non-ENOENT read rejection and caches it by mtime", async () => {
+		const store = seed([[`${PROJECT_DIR}/locked.md`, file(ruleText("Locked"))]]);
+		const { deps, callLog } = fakeDeps(store);
+		const failing: DiscoveryDeps = {
+			...deps,
+			readFile: async (path) => {
+				callLog.read.push(path);
+				throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+			},
+		};
+		const first = await discover(failing, new Map(), opts(true));
+		expect(first.rules).toEqual([]);
+		expect(first.errors).toEqual([
+			{ code: "read-failure", message: expect.stringContaining("EACCES"), file: `${PROJECT_DIR}/locked.md` },
+		]);
+		const entry = first.cache.get(normalizedPath(`${PROJECT_DIR}/locked.md`));
+		expect(entry?.error?.code).toBe("read-failure");
+
+		// Cached like a parse error: an unchanged mtime reuses the error, no re-read.
+		const second = await discover(failing, first.cache, opts(true));
+		expect(callLog.read.filter((path) => path.endsWith("locked.md"))).toHaveLength(1);
+		expect(second.errors).toEqual(first.errors);
 	});
 });
 
@@ -225,7 +348,7 @@ describe("discover — mtime cache", () => {
 			listRuleFiles: async (dir) => (dir === PROJECT_DIR ? ["a.md", "gone.md"] : []),
 			stat: async (path) => {
 				if (path.endsWith("gone.md")) {
-					throw new Error(`ENOENT: ${path}`);
+					throw enoent(path);
 				}
 				return { mtimeMs: 1 };
 			},
@@ -243,7 +366,7 @@ describe("discover — mtime cache", () => {
 			stat: async () => ({ mtimeMs: 1 }),
 			readFile: async (path) => {
 				if (path.endsWith("gone.md")) {
-					throw new Error(`ENOENT: ${path}`);
+					throw enoent(path);
 				}
 				return ruleText("A");
 			},

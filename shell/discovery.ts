@@ -12,7 +12,12 @@
  *   re-implements it. Only discovery metadata (path/source) is attached, and
  *   the returned rule id is finalized to the file stem per the discovery
  *   contract (the parser's broader `source:path` id is discovery's to
- *   narrow — see `loadRule`).
+ *   narrow — see `loadRule`). Ids are unique per source per pass: the first
+ *   file with a stem (in sorted-path order) keeps the bare stem, later files
+ *   get the smallest free `<stem>-2`, `<stem>-3`, … suffix, skipping any id
+ *   already used in the pass (including another file's bare stem). Scoping
+ *   is per-source — project and global stems are independent; a cached rule
+ *   whose resolved id changes between passes is refreshed, never mutated.
  * - Production adapters (`nodeDiscoveryDeps`, `tinyglobbyScanner`) wrap
  *   node:fs/promises and tinyglobby; tests inject deterministic fakes.
  *
@@ -26,9 +31,16 @@
  * - Trust gate: when the project is untrusted, the project directory is
  *   never listed, stat-ed, or read.
  * - A missing directory contributes nothing and is not an error (the
- *   production `listRuleFiles` resolves ENOENT to []); a file that vanishes
- *   between listing and stat/read is skipped silently — no rule, no error,
- *   absent from the next cache.
+ *   production `listRuleFiles` resolves ENOENT to []); a REJECTED
+ *   `listRuleFiles` is collected as one `source-unreadable` error naming the
+ *   directory — that source contributes no rules and no cache entries, and
+ *   discovery continues with the remaining sources.
+ * - A file that vanishes between listing and stat/read (ENOENT from stat or
+ *   read) is skipped silently — no rule, no error, absent from the next
+ *   cache. A non-ENOENT read failure (permissions, wrong file type, …) is a
+ *   genuine failure: it is collected as a `read-failure` error naming the
+ *   file and cached alongside the mtime, reusing the parse-error cache
+ *   semantics instead of conflating with vanished-skip.
  * - mtime cache keyed by absolute normalized path: an entry with an
  *   unchanged mtimeMs is reused (rule OR error) without a read; a changed
  *   mtime re-reads and re-parses; files no longer listed are dropped.
@@ -90,6 +102,35 @@ const fileStem = (path: string): string => {
 /** Joins a listed (relative) name onto its directory as an absolute normalized path. */
 const resolveListed = (dir: string, listed: string): NormalizedPath => normalizedPath(`${dir}/${listed}`);
 
+/**
+ * Resolves unique rule ids for one source's sorted listing: the first file
+ * with a given stem keeps the bare stem; later files (in sorted-path order)
+ * get the smallest free `<stem>-2`, `<stem>-3`, … suffix. A suffix skips ids
+ * already used in this pass — including another file's bare stem — so ids
+ * are unique within the source and stable across runs. Scoping is
+ * per-source: discovery order is project-first-then-global and cross-source
+ * stems stay independent (the selection pipeline's content-tie dedupe
+ * already prefers project rules).
+ */
+const assignSourceIds = (paths: readonly NormalizedPath[]): ReadonlyMap<NormalizedPath, string> => {
+	const used = new Set<string>();
+	const ids = new Map<NormalizedPath, string>();
+	for (const abs of paths) {
+		const stem = fileStem(abs);
+		let id = stem;
+		if (used.has(id)) {
+			let n = 2;
+			while (used.has(`${stem}-${String(n)}`)) {
+				n += 1;
+			}
+			id = `${stem}-${String(n)}`;
+		}
+		used.add(id);
+		ids.set(abs, id);
+	}
+	return ids;
+};
+
 /** True when a thrown cause is a missing-path error (production ENOENT adapter). */
 const isEnoent = (cause: unknown): boolean =>
 	typeof cause === "object" && cause !== null && "code" in cause && cause["code"] === "ENOENT";
@@ -106,9 +147,12 @@ type LoadedRule =
 /**
  * Loads one listed rule file: stat → cache check → (re)read → parse. On a
  * cache hit with an unchanged mtimeMs the cached rule or error is reused
- * (no read) and the same entry object carries into the next cache. Any
- * stat/read failure means the file vanished mid-scan: skip silently. Parse
- * failures are returned as errors and cached alongside the mtime.
+ * (no read) and the same entry object carries into the next cache; a cached
+ * rule whose resolved id changed (a colliding file appeared or vanished) is
+ * refreshed onto a new entry with the new id. A stat ENOENT or a read ENOENT
+ * means the file vanished mid-scan: skip silently. A non-ENOENT read failure
+ * is returned as a `read-failure` error and cached alongside the mtime.
+ * Parse failures are returned as errors and cached alongside the mtime.
  */
 const loadRule = async (
 	deps: DiscoveryDeps,
@@ -116,6 +160,7 @@ const loadRule = async (
 	nextCache: Map<NormalizedPath, DiscoveryCacheEntry>,
 	abs: NormalizedPath,
 	source: RuleSource,
+	id: string,
 ): Promise<LoadedRule> => {
 	let statResult: { readonly mtimeMs: number };
 	try {
@@ -125,11 +170,19 @@ const loadRule = async (
 	}
 	const cached = cache.get(abs);
 	if (cached !== undefined && cached.mtimeMs === statResult.mtimeMs) {
-		nextCache.set(abs, cached);
 		if (cached.rule !== undefined) {
-			return { kind: "rule", rule: cached.rule };
+			if (cached.rule.id === ruleId(id)) {
+				nextCache.set(abs, cached);
+				return { kind: "rule", rule: cached.rule };
+			}
+			// The resolved id changed between passes (collision set changed):
+			// refresh the rule and its cache entry, never the input cache.
+			const rule: Rule = { ...cached.rule, id: ruleId(id) };
+			nextCache.set(abs, { mtimeMs: statResult.mtimeMs, rule });
+			return { kind: "rule", rule };
 		}
 		if (cached.error !== undefined) {
+			nextCache.set(abs, cached);
 			return { kind: "error", error: cached.error };
 		}
 		return { kind: "skipped" };
@@ -137,17 +190,29 @@ const loadRule = async (
 	let raw: string;
 	try {
 		raw = await deps.readFile(abs);
-	} catch {
-		return { kind: "skipped" };
+	} catch (cause) {
+		if (isEnoent(cause)) {
+			return { kind: "skipped" };
+		}
+		// A genuine read failure is not absence: surface it like a parse error
+		// instead of conflating it with a vanished file.
+		const error: RuleError = {
+			code: "read-failure",
+			message: `failed to read rule file: ${cause instanceof Error ? cause.message : String(cause)}`,
+			file: abs,
+		};
+		nextCache.set(abs, { mtimeMs: statResult.mtimeMs, error });
+		return { kind: "error", error };
 	}
 	const parsed = parseRule(raw, { path: abs, source });
 	if (!parsed.ok) {
 		nextCache.set(abs, { mtimeMs: statResult.mtimeMs, error: parsed.error });
 		return { kind: "error", error: parsed.error };
 	}
-	// Discovery finalizes the id to the file stem (discovery contract); the
-	// parser stays the sole owner of validation, defaults, and content.
-	const rule: Rule = { ...parsed.value, id: ruleId(fileStem(abs)) };
+	// Discovery finalizes the id to the (disambiguated) file stem (discovery
+	// contract); the parser stays the sole owner of validation, defaults, and
+	// content.
+	const rule: Rule = { ...parsed.value, id: ruleId(id) };
 	nextCache.set(abs, { mtimeMs: statResult.mtimeMs, rule });
 	return { kind: "rule", rule };
 };
@@ -176,10 +241,24 @@ export const discover = async (
 	const errors: RuleError[] = [];
 	const nextCache = new Map<NormalizedPath, DiscoveryCacheEntry>();
 	for (const [dir, source] of sources) {
-		const listed = await deps.listRuleFiles(dir);
+		let listed: readonly string[];
+		try {
+			listed = await deps.listRuleFiles(dir);
+		} catch (cause) {
+			// Totality: one unreadable source never fails the pass — it
+			// contributes nothing and the remaining sources continue.
+			errors.push({
+				code: "source-unreadable",
+				message: `failed to list rules source: ${cause instanceof Error ? cause.message : String(cause)}`,
+				file: dir,
+			});
+			continue;
+		}
 		const paths = listed.map((name) => resolveListed(dir, name)).filter(isRuleFile).sort();
+		const ids = assignSourceIds(paths);
 		for (const abs of paths) {
-			const loaded = await loadRule(deps, cache, nextCache, abs, source);
+			const id = ids.get(abs) ?? fileStem(abs);
+			const loaded = await loadRule(deps, cache, nextCache, abs, source, id);
 			if (loaded.kind === "rule") {
 				rules.push(loaded.rule);
 			} else if (loaded.kind === "error") {

@@ -182,6 +182,23 @@ describe("piEventToStateEvents — path handling", () => {
 });
 
 describe("piEventToStateEvents — totality and purity", () => {
+	it("maps null input to no events instead of throwing", () => {
+		// A null reaching the handler (defensive runtime shape) must not deref
+		// `.type` — extension runtime errors are fatal in pi.
+		const event = null as unknown as PiEventShape;
+		expect(piEventToStateEvents(event, { cwd: CWD })).toEqual([]);
+	});
+
+	it("maps undefined input to no events instead of throwing", () => {
+		const event = undefined as unknown as PiEventShape;
+		expect(piEventToStateEvents(event, { cwd: CWD })).toEqual([]);
+	});
+
+	it("maps a non-object primitive to no events instead of throwing", () => {
+		const event = 42 as unknown as PiEventShape;
+		expect(piEventToStateEvents(event, { cwd: CWD })).toEqual([]);
+	});
+
 	it("maps an unknown foreign event shape to no events", () => {
 		// Simulates a foreign/older runtime shape: not part of PiEventShape, so
 		// the test cast is the only sanctioned one here. The mapper must stay

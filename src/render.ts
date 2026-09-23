@@ -12,7 +12,9 @@
  *   line before the first rule.
  * - Per rule: `## <description>`, then a `> Triggered by:` blockquote line
  *   ONLY when reasons exist (the whole line is omitted otherwise), then the
- *   rule content verbatim — never trimmed or reflowed.
+ *   rule content verbatim — never trimmed or reflowed — except that its
+ *   trailing whitespace is stripped so body padding can never add blank
+ *   lines around the `---` separators (R3-001 normalization).
  * - Rules are separated by a horizontal rule (`---`) with a blank line on
  *   each side.
  * - Trigger phrases per reason kind: `always active`, `` glob `<pattern>` ``,
@@ -62,8 +64,15 @@ const triggerPhrase = (reason: MatchReason): string => {
 const triggerLine = (reasons: readonly MatchReason[]): string =>
 	reasons.length === 0 ? "" : `> Triggered by: ${reasons.map(triggerPhrase).join(" · ")}\n`;
 
-/** One entry rendered as heading, optional trigger line, content verbatim. */
-const renderEntry = ({ rule, reasons }: RenderEntry): string => `## ${rule.description}\n${triggerLine(reasons)}${rule.content}`;
+/**
+ * One entry rendered as heading, optional trigger line, content verbatim
+ * except for its trailing whitespace, which is stripped so the `---`
+ * separator region never receives body padding as extra blank lines
+ * (R3-001); the join and the renderer's final newline supply the only
+ * surrounding blank lines. Deterministic, so equal inputs stay byte-identical.
+ */
+const renderEntry = ({ rule, reasons }: RenderEntry): string =>
+	`## ${rule.description}\n${triggerLine(reasons)}${rule.content.replace(/\s+$/, "")}`;
 
 /** sha-256 hex digest of a full rendered section content. */
 const sha256 = (content: string): string => createHash("sha256").update(content).digest("hex");

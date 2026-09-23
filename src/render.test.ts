@@ -71,6 +71,22 @@ describe("renderSection — block shape", () => {
 		const two = renderSection([entry(ruleWith({ id: "two", content: "two body" }))]);
 		expect(one?.contentHash).not.toBe(two?.contentHash);
 	});
+
+	it("normalizes trailing blank lines in a body so separators never double-blank-line (R3-001)", () => {
+		const block = renderSection([
+			entry(ruleWith({ id: "a", description: "padded", content: "Body line.\n\n\n" }), [{ kind: "always" }]),
+			entry(ruleWith({ id: "b", description: "next", content: "Second body." })),
+		]);
+		// Entry region: padding collapsed, single blank line around the separator.
+		expect(block?.content.endsWith("## padded\n> Triggered by: always active\nBody line.\n\n---\n\n## next\nSecond body.\n")).toBe(true);
+		expect(block?.content.includes("\n\n\n")).toBe(false);
+	});
+
+	it("keeps exactly one trailing newline when the last body is padded", () => {
+		const block = renderSection([entry(ruleWith({ id: "a", description: "padded", content: "Body line.\n\n\n" }))]);
+		expect(block?.content.endsWith("Body line.\n")).toBe(true);
+		expect(block?.content.includes("\n\n\n")).toBe(false);
+	});
 });
 
 describe("renderSection — golden files", () => {

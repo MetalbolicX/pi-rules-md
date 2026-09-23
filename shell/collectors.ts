@@ -33,8 +33,9 @@
  * loses that prefix; relative paths pass through unchanged; absolute paths
  * outside cwd are kept as-is.
  *
- * Totality: any event outside the known kinds (foreign runtime shape) maps
- * to `[]` — never a throw, because extension runtime errors are fatal in pi.
+ * Totality: any event outside the known kinds (foreign runtime shape), as
+ * well as a null/undefined or non-object input, maps to `[]` — never a
+ * throw, because extension runtime errors are fatal in pi.
  */
 import type { StateEvent } from "../src/state.ts";
 import { normalizedPath } from "../src/types.ts";
@@ -73,9 +74,17 @@ const extractPathArg = (input: Record<string, unknown> | undefined): string | un
 
 /**
  * Pure, total mapper: one pi event → 0..n state events. Never throws, never
- * mutates `event`; deterministic for equal inputs.
+ * mutates `event`; deterministic for equal inputs. Defensive runtime inputs
+ * (null, undefined, non-object primitives) map to `[]` — extension runtime
+ * errors are fatal in pi, so the `.type` deref is guarded.
  */
-export const piEventToStateEvents = (event: PiEventShape, opts: { readonly cwd: string }): readonly StateEvent[] => {
+export const piEventToStateEvents = (
+	event: PiEventShape | null | undefined,
+	opts: { readonly cwd: string },
+): readonly StateEvent[] => {
+	if (event === null || typeof event !== "object") {
+		return [];
+	}
 	switch (event.type) {
 		case "session_compact":
 			return [{ type: "session_compact" }];
