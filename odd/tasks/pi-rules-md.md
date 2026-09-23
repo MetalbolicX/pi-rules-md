@@ -185,6 +185,25 @@ no code escape hatches.
   extract to scratch → symlink 3 runtime deps (no pnpm install allowed) →
   pi --extension <extracted>/index.ts -p smoke exit 0; final acceptance
   sweep + docs commit.
+- T15 W1 `fix(shell): harden discovery totality, id collisions, and render
+  normalization` (29236a3) + correction `fix(shell): disambiguate rule ids
+  across the whole discovery pass` (e4cb517) — strict TDD via worker
+  (one interaction_required surface approval: src/types.ts + types.test
+  for the error-kind union; one review-reminder round hijack, resumed).
+  Source-unreadable error kind added; read-failure reused for file reads;
+  discover total (no rejection path); collectors null guard; render body
+  trailing-whitespace normalization (goldens unchanged legitimately);
+  GLOBAL id uniqueness across the merged pass (project keeps bare stem).
+  Reviews: review-783db494598141f6 APPROVED+burned before 29236a3 (one
+  informational advisory discovery.ts:120, pre-known); correction
+  review-292efe64b263baab APPROVED+burned before e4cb517. Verifier round 1
+  FAIL (per-source id scoping — severe) → correction → verifier round 2
+  PASS (24/24, 324/324, typecheck 0). Two collectBinding transcription
+  corruptions this W1 (duplicated hex fragment; cbcb splice) — mechanical
+  jq-validated relay adopted: heredoc → token=value + cross-field checks →
+  canonical relay. Follow-ups banked: stat non-ENOENT still silent-skip
+  (cannot throw); source-unreadable never cached (retried per pass,
+  chosen).
   (500 rules × 50 paths under budget)
 
 ## Delivery strategy
