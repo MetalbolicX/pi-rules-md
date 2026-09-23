@@ -105,7 +105,21 @@ no code escape hatches.
   alwaysApply); tools:[] accepted (pinned), globs:[] rejected (pinned);
   cross-field invariants stay in frontmatter in original order; metadata keys
   (version/description/priority/enforcement) outside the table. Verifier: gpt-6-luna.
-  INSTRUMENTATION LIVE: gentle-pi patched log-only (seams: session-key,
+  INSTRUMENTATION: gentle-pi patched log-only (seams: session-key,
   retain-skip/done, capture-lookup) writing /tmp/rdd-debug.log; backup at
   ~/.pi/rdd-debug/gentle-ai.ts.backup; pending post-restart probe of frozen
-  lineage review-4bcbc28fdc992857.
+  lineage review-4bcbc28fdc992857. POST-RESTART PROBE RESULT: route system
+  works (same instance, same session key, registration landed, mapSize 1);
+  rejections were MY transcription corruption of the ~2750-char collectBinding
+  (offline diff via facade decoder pinpointed char 1473). Unblock: mechanical
+  canonical binding (make-binding.mjs, ~/.pi/rdd-debug/) -> capture ACCEPTED ->
+  forecast -> acknowledged run -> reviewer APPROVED the T2 candidate.
+  Second blocker: reviewer model must live in ~/.pi/gentle-ai/models.json
+  (NOT subagents.json) -> review-reliability -> gpt-6-luna. Third: burn
+  preflight rejected post-commit workspace drift (intended-untracked now
+  tracked) -> user-approved surgery: backup/pre-burn branch, reset --hard
+  651234b, restore frozen tree 53d830db content (4 tracked-modified + 2
+  untracked), rm src/conditions -> acknowledge-approved BURNED
+  (gentle-ai.review-acknowledged/v1, mutation committed) -> reset --hard
+  backup/pre-burn -> tree clean 66b93c1. Harness unpatched from backup.
+  T2 native review COMPLETE end-to-end.
