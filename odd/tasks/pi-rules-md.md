@@ -54,7 +54,15 @@ no code escape hatches.
   `> Triggered by:` only when reasons exist, content verbatim, `---`
   separators, single trailing newline; static goldens in
   src/render.golden/ compared byte-exactly.
-- [ ] 8. `src/engine.ts` — evaluate pipeline + immutable EvaluationTrace
+- [x] 8. `src/engine.ts` — evaluate pipeline + immutable EvaluationTrace.
+  Implemented per pinned contract: evaluate(rules, ctx, {scan, budget}) →
+  Promise<EvaluationTrace>; trust gate defense-in-depth (untrusted project
+  rules unmatched AND excluded from the scan pool — endorsed parent
+  reading); exists-scan only for exists/both candidates; path condition
+  ANDed with declared tools/model/branch (absent = vacuous); reasons
+  ordered path → tool → model → branch; EvaluationTrace added to
+  src/types.ts ({evaluatedAt, results, selection, block}); deterministic,
+  no input mutation.
 - [ ] 9. `src/state.ts` — reducer: transition(state, PiEvent) → state
 - [ ] 10. `shell/discovery.ts` — global ~/.pi/agent/rules/ + project .pi/rules/,
   trust gate, mtime cache
@@ -189,3 +197,13 @@ no code escape hatches.
   nits banked for T15: verbatim-content trailing newline (R3-001) and no
   compile-time exhaustiveness guard for future MatchReason variants
   (noImplicitReturns off). Next: T8 engine pipeline + EvaluationTrace.
+- T8 `feat(engine): evaluate pipeline with immutable evaluation trace` —
+  strict TDD RED (missing ./engine.ts module), GREEN 24/24; full 226/226
+  (202 pre-existing unchanged), typecheck 0. One in-test fixture fix by the
+  worker (scanner receives only positive globs). Native workspace review
+  lineage review-4cf822a416f95c85: medium tier, review-reliability
+  APPROVED and acknowledged (authority burned) BEFORE commit, no advisory
+  findings. One parent relay slip during capture (duplicated JSON fragment
+  in artifactSubject) — facade rejected it as invalid JSON before reaching
+  the provider; exact re-relay accepted (transcription failure mode
+  reconfirmed).

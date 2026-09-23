@@ -184,3 +184,23 @@ export interface InjectionBlock {
 	/** Hash of the content; drives hash hysteresis (skip identical patches). */
 	readonly contentHash: string;
 }
+
+/**
+ * Immutable outcome of one full evaluation run: everything the state and
+ * injection layers (later shell tasks) consume, plus the per-rule results
+ * that feed the `/rules` report. Pure readonly data — no methods.
+ */
+export interface EvaluationTrace {
+	/** Evaluation time, copied from `ctx.now` (keeps traces deterministic). */
+	readonly evaluatedAt: number;
+	/**
+	 * Final merged outcome for every rule, in rule order: the path condition
+	 * AND all declared non-path conditions. Skipped (trust-gated) rules appear
+	 * as unmatched with their skip reason.
+	 */
+	readonly results: readonly MatchResult[];
+	/** Selection outcome over the matched rules (dedupe, priority, budget). */
+	readonly selection: Selection;
+	/** The rendered section; `undefined` when nothing is active. */
+	readonly block: InjectionBlock | undefined;
+}
