@@ -87,6 +87,34 @@ export interface Rule {
 	readonly content: string;
 }
 
+/** Machine-readable error codes for rule parsing failures. */
+export type RuleErrorCode =
+	| "missing-frontmatter"
+	| "yaml-syntax"
+	| "unknown-key"
+	| "invalid-value"
+	| "missing-description"
+	| "no-activation-condition"
+	| "match-without-globs"
+	| "invalid-version"
+	| "read-failure";
+
+/**
+ * Why a rule file could not be parsed into a Rule. Discriminated by `code`;
+ * `message` is human-readable and `file` optionally names the source file.
+ * Parsing is total: every failure is one of these values, never a throw.
+ */
+export type RuleError =
+	| { readonly code: "missing-frontmatter"; readonly message: string; readonly file?: string }
+	| { readonly code: "yaml-syntax"; readonly message: string; readonly file?: string }
+	| { readonly code: "unknown-key"; readonly message: string; readonly file?: string }
+	| { readonly code: "invalid-value"; readonly message: string; readonly file?: string }
+	| { readonly code: "missing-description"; readonly message: string; readonly file?: string }
+	| { readonly code: "no-activation-condition"; readonly message: string; readonly file?: string }
+	| { readonly code: "match-without-globs"; readonly message: string; readonly file?: string }
+	| { readonly code: "invalid-version"; readonly message: string; readonly file?: string }
+	| { readonly code: "read-failure"; readonly message: string; readonly file?: string };
+
 /** Snapshot of everything conditions may look at during an evaluation. */
 export interface EvaluationContext {
 	/** Evaluation time as epoch milliseconds. */

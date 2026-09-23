@@ -7,6 +7,8 @@ import type {
 	MatchResult,
 	NormalizedPath,
 	Rule,
+	RuleError,
+	RuleErrorCode,
 	RuleId,
 	Selection,
 } from "./types.ts";
@@ -104,6 +106,49 @@ describe("Rule", () => {
 
 	it("version is the literal 1, not any number", () => {
 		expectTypeOf(rule.version).toEqualTypeOf<1>();
+	});
+});
+
+describe("RuleError", () => {
+	it("carries a machine code, a message, and optional file context", () => {
+		const error: RuleError = {
+			code: "unknown-key",
+			message: 'unknown frontmatter key "banana"',
+			file: "rules/x.md",
+		};
+		expect(error.code).toBe("unknown-key");
+		expect(error.message).toContain("banana");
+		expect(error.file).toBe("rules/x.md");
+	});
+
+	it("omits file when absent", () => {
+		const error: RuleError = { code: "missing-frontmatter", message: "no --- block" };
+		expect("file" in error).toBe(false);
+	});
+
+	it("forbids explicit file: undefined (exactOptionalPropertyTypes)", () => {
+		// @ts-expect-error exactOptionalPropertyTypes forbids explicit undefined
+		const error: RuleError = { code: "yaml-syntax", message: "x", file: undefined };
+		expect(error.code).toBe("yaml-syntax");
+	});
+
+	it("narrows exhaustively on the code discriminant", () => {
+		const codeOf = (error: RuleError): RuleErrorCode => {
+			switch (error.code) {
+				case "missing-frontmatter":
+				case "yaml-syntax":
+				case "unknown-key":
+				case "invalid-value":
+				case "missing-description":
+				case "no-activation-condition":
+				case "match-without-globs":
+				case "invalid-version":
+				case "read-failure":
+					return error.code;
+			}
+		};
+		expect(codeOf({ code: "read-failure", message: "x" })).toBe("read-failure");
+		expectTypeOf(codeOf({ code: "invalid-version", message: "x" })).toEqualTypeOf<RuleErrorCode>();
 	});
 });
 

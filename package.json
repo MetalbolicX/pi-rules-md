@@ -21,7 +21,9 @@
 		"test": "vitest run",
 		"test:watch": "vitest"
 	},
-	"dependencies": {},
+	"dependencies": {
+		"yaml": "^2.9.1"
+	},
 	"devDependencies": {
 		"@earendil-works/pi-coding-agent": "^0.87.1",
 		"@types/node": "^24.0.0",
