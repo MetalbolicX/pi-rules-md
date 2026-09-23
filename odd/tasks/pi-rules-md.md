@@ -37,7 +37,7 @@ no code escape hatches.
   fs/readFile injected as parameters — 28a4b74
 - [x] 3. `src/conditions/` — predicate factories glob/tool/model/branch/always
   + `combinators.ts` (and/anyOf/not) — df4492a+f49544c (incl. globs:[] fix)
-- [ ] 4. `src/conditions/table.ts` — data registry; unknown-key strict errors
+- [x] 4. `src/conditions/table.ts` — data registry; unknown-key strict errors — ec18878
 - [ ] 5. `src/match.ts` — touched-match + exists-match (extension-targeted
   project scan derived from globs)
 - [ ] 6. `src/select.ts` — dedupe(content hash) → sort(priority) → token
@@ -96,3 +96,16 @@ no code escape hatches.
   anyOf([])=false; @types/picomatch devDep (picomatch 4.0.7 untyped,
   esModuleInterop off → single sanctioned .default unwrap).
   version:1.0 nit still deferred to T15.
+- T4 ec18878 `feat(conditions): declarative condition registry` — 154/154 tests
+  (113 pre-existing unchanged), typecheck 0, verifier PASS (after one cast-hygiene
+  fix round: parseMatch narrowing + CONDITION_KEYS literal tuple with mutual-
+  extends compile-time binding; exactly one sanctioned cast in conditionSpec).
+  Decisions: kind-discriminated spec union (mode/ctx/path); CONDITION_KEYS order
+  mirrors original validation precedence (globs, match, tools, branch, model,
+  alwaysApply); tools:[] accepted (pinned), globs:[] rejected (pinned);
+  cross-field invariants stay in frontmatter in original order; metadata keys
+  (version/description/priority/enforcement) outside the table. Verifier: gpt-6-luna.
+  INSTRUMENTATION LIVE: gentle-pi patched log-only (seams: session-key,
+  retain-skip/done, capture-lookup) writing /tmp/rdd-debug.log; backup at
+  ~/.pi/rdd-debug/gentle-ai.ts.backup; pending post-restart probe of frozen
+  lineage review-4bcbc28fdc992857.
