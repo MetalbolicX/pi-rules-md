@@ -10,14 +10,21 @@
  * - YAML is parsed with the core schema: no YAML 1.1 unsafe coercions
  *   (`yes` stays the string "yes"), duplicate keys are rejected.
  * - Anchors and aliases are rejected outright: rules are data, not templates.
- * - Unknown keys are errors; every known key has an exact expected type.
+ * - Unknown keys are errors; the accepted set is derived from the condition
+ *   table (src/conditions/table.ts) plus the metadata keys checked here.
+ * - The six condition keys parse THROUGH the table: each table spec owns its
+ *   key's type rules (and error message); this module attaches the file and
+ *   keeps the cross-field invariants, in the same stage order as before:
+ *   field-types (via table) → match-without-globs → no-activation-condition.
  * - Defaults are materialized here so `Rule` fields stay required downstream.
  */
 import { isAlias, isMap, isScalar, isSeq, parseDocument, visit } from "yaml";
 import { err, ok } from "./result.ts";
 import type { Result } from "./result.ts";
+import { CONDITION_KEYS, conditionSpec } from "./conditions/table.ts";
+import type { ConditionName, ConditionValueOf } from "./conditions/table.ts";
 import { ruleId } from "./types.ts";
-import type { Enforcement, MatchMode, NormalizedPath, Rule, RuleError, RuleErrorCode, RuleSource } from "./types.ts";
+import type { Enforcement, NormalizedPath, Rule, RuleError, RuleErrorCode, RuleSource } from "./types.ts";
 
 /** Discovery metadata for a rule file, threaded through parsing and errors. */
 export interface RuleMeta {
@@ -27,21 +34,12 @@ export interface RuleMeta {
 	readonly source: RuleSource;
 }
 
-/** Frontmatter keys rule format v1 knows about; anything else is an error. */
-const KNOWN_KEYS: ReadonlySet<string> = new Set([
-	"alwaysApply",
-	"branch",
-	"description",
-	"enforcement",
-	"globs",
-	"match",
-	"model",
-	"priority",
-	"tools",
-	"version",
-]);
+/** Metadata keys validated directly here; condition keys come from the table. */
+const METADATA_KEYS: readonly string[] = ["description", "enforcement", "priority", "version"];
 
-const MATCH_MODES: readonly MatchMode[] = ["touched", "exists", "both"];
+/** Every accepted frontmatter key: the six condition keys (table) + metadata. */
+const KNOWN_KEYS: ReadonlySet<string> = new Set<string>([...CONDITION_KEYS, ...METADATA_KEYS]);
+
 const ENFORCEMENTS: readonly Enforcement[] = ["enforce", "recommend", "inform"];
 
 const ruleError = (code: RuleErrorCode, message: string, file?: string): RuleError =>
@@ -52,6 +50,27 @@ const yamlSyntax = (detail: string, file: NormalizedPath): RuleError =>
 
 const invalidValue = (key: string, expected: string, file: NormalizedPath): RuleError =>
 	ruleError("invalid-value", `frontmatter key "${key}" is invalid: expected ${expected}`, file);
+
+/** Attaches the rule file to a table-produced parse error (specs are file-agnostic). */
+const withFile = (error: RuleError, file: NormalizedPath): RuleError => ({ ...error, file });
+
+/**
+ * Parses one condition key through the table: absent stays `undefined` (the
+ * default is materialized later), present must satisfy the spec. The result
+ * keeps the spec's exact value type, so callers never cast.
+ */
+const parseConditionField = <N extends ConditionName>(
+	name: N,
+	frontmatter: Record<string, unknown>,
+	file: NormalizedPath,
+): Result<ConditionValueOf<N> | undefined, RuleError> => {
+	const raw = frontmatter[name];
+	if (raw === undefined) {
+		return ok(undefined);
+	}
+	const parsed = conditionSpec(name).parse(raw);
+	return parsed.ok ? ok(parsed.value) : err(withFile(parsed.error, file));
+};
 
 /**
  * Splits the leading `---` frontmatter block from the markdown body.
@@ -117,19 +136,6 @@ const parseYamlBody = (frontmatter: string, file: NormalizedPath): Result<Record
 	return ok(value as Record<string, unknown>);
 };
 
-/** Accepts a string (normalized to a one-element array) or an array of strings. */
-const asStringArray = (value: unknown): readonly string[] | null => {
-	if (typeof value === "string") {
-		return [value];
-	}
-	if (Array.isArray(value) && value.every((entry): entry is string => typeof entry === "string")) {
-		return [...value];
-	}
-	return null;
-};
-
-const isMatchMode = (value: unknown): value is MatchMode => MATCH_MODES.includes(value as MatchMode);
-
 const isEnforcement = (value: unknown): value is Enforcement => ENFORCEMENTS.includes(value as Enforcement);
 
 /**
@@ -177,45 +183,35 @@ export const parseRule = (raw: string, meta: RuleMeta): Result<Rule, RuleError> 
 		);
 	}
 
-	let globs: readonly string[] | undefined;
-	if (frontmatter["globs"] !== undefined) {
-		const parsedGlobs = asStringArray(frontmatter["globs"]);
-		if (parsedGlobs === null) {
-			return err(invalidValue("globs", "a string or an array of strings", file));
-		}
-		// An explicitly empty array is never a valid trigger, and must not slip
-		// past `match-without-globs` (which only checks absence) leaving a dead
-		// `match` key. This runs in the field-types stage, which precedes the
-		// match-without-globs check below.
-		if (parsedGlobs.length === 0) {
-			return err(invalidValue("globs", "a non-empty string or a non-empty array of strings", file));
-		}
-		globs = parsedGlobs;
+	const globsParsed = parseConditionField("globs", frontmatter, file);
+	if (!globsParsed.ok) {
+		return err(globsParsed.error);
 	}
+	const globs = globsParsed.value;
 
-	const matchValue = frontmatter["match"];
-	if (matchValue !== undefined && !isMatchMode(matchValue)) {
-		return err(invalidValue("match", `"touched", "exists", or "both"`, file));
+	const matchParsed = parseConditionField("match", frontmatter, file);
+	if (!matchParsed.ok) {
+		return err(matchParsed.error);
 	}
+	const matchValue = matchParsed.value;
 
-	let tools: readonly string[] | undefined;
-	if (frontmatter["tools"] !== undefined) {
-		const parsedTools = asStringArray(frontmatter["tools"]);
-		if (parsedTools === null) {
-			return err(invalidValue("tools", "a string or an array of strings", file));
-		}
-		tools = parsedTools;
+	const toolsParsed = parseConditionField("tools", frontmatter, file);
+	if (!toolsParsed.ok) {
+		return err(toolsParsed.error);
 	}
+	const tools = toolsParsed.value;
 
-	const branchValue = frontmatter["branch"];
-	if (branchValue !== undefined && typeof branchValue !== "string") {
-		return err(invalidValue("branch", "a string", file));
+	const branchParsed = parseConditionField("branch", frontmatter, file);
+	if (!branchParsed.ok) {
+		return err(branchParsed.error);
 	}
+	const branchValue = branchParsed.value;
 
-	const modelValue = frontmatter["model"];
-	if (modelValue !== undefined && typeof modelValue !== "string") {
-		return err(invalidValue("model", "a string", file));
+	const modelParsed = parseConditionField("model", frontmatter, file);
+	if (!modelParsed.ok) {
+		return err(modelParsed.error);
 	}
+	const modelValue = modelParsed.value;
 
 	const priorityValue = frontmatter["priority"];
 	if (priorityValue !== undefined && (typeof priorityValue !== "number" || !Number.isInteger(priorityValue))) {
@@ -227,10 +223,11 @@ export const parseRule = (raw: string, meta: RuleMeta): Result<Rule, RuleError> 
 		return err(invalidValue("enforcement", `"enforce", "recommend", or "inform"`, file));
 	}
 
-	const alwaysApplyValue = frontmatter["alwaysApply"];
-	if (alwaysApplyValue !== undefined && typeof alwaysApplyValue !== "boolean") {
-		return err(invalidValue("alwaysApply", "a boolean", file));
+	const alwaysApplyParsed = parseConditionField("alwaysApply", frontmatter, file);
+	if (!alwaysApplyParsed.ok) {
+		return err(alwaysApplyParsed.error);
 	}
+	const alwaysApplyValue = alwaysApplyParsed.value;
 
 	const hasGlobs = globs !== undefined && globs.length > 0;
 	if (matchValue !== undefined && globs === undefined) {
@@ -240,8 +237,8 @@ export const parseRule = (raw: string, meta: RuleMeta): Result<Rule, RuleError> 
 	const hasActivation =
 		hasGlobs ||
 		(tools !== undefined && tools.length > 0) ||
-		typeof branchValue === "string" ||
-		typeof modelValue === "string" ||
+		branchValue !== undefined ||
+		modelValue !== undefined ||
 		alwaysApplyValue === true;
 	if (!hasActivation) {
 		return err(
@@ -267,8 +264,8 @@ export const parseRule = (raw: string, meta: RuleMeta): Result<Rule, RuleError> 
 		content: trimBlankEdges(split.content),
 		...(globs === undefined ? {} : { globs }),
 		...(tools === undefined ? {} : { tools }),
-		...(branchValue === undefined ? {} : { branch: branchValue as string }),
-		...(modelValue === undefined ? {} : { model: modelValue as string }),
+		...(branchValue === undefined ? {} : { branch: branchValue }),
+		...(modelValue === undefined ? {} : { model: modelValue }),
 	};
 	return ok(rule);
 };

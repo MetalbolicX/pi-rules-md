@@ -285,6 +285,31 @@ describe("parseRule — explicitly empty globs", () => {
 	});
 });
 
+describe("parseRule — condition table integration", () => {
+	it("still recognizes metadata keys outside the condition table", () => {
+		const error = errOf(parseRule(fm("description: x\nversion: 1\npriority: 3"), projectMeta));
+		expect(error.code).toBe("no-activation-condition");
+	});
+
+	it("checks unknown keys before condition field types", () => {
+		const error = errOf(parseRule(fm("description: x\nversion: 1\nglobs: 5\nbanana: yes"), projectMeta));
+		expect(error.code).toBe("unknown-key");
+		expect(error.message).toContain("banana");
+	});
+
+	it("keeps condition field-type checks before metadata checks", () => {
+		const error = errOf(parseRule(fm("description: x\nversion: 1\npriority: 1.5\nglobs: 5"), projectMeta));
+		expect(error.code).toBe("invalid-value");
+		expect(error.message).toContain("globs");
+	});
+
+	it("attaches the rule file to condition parse errors", () => {
+		const error = errOf(parseRule(fm("description: x\nversion: 1\nglobs: 5"), projectMeta));
+		expect(error.code).toBe("invalid-value");
+		expect(error.file).toBe(projectMeta.path);
+	});
+});
+
 describe("readRuleFile", () => {
 	it("reads through the injected readFile and parses the rule", async () => {
 		const requested: string[] = [];
