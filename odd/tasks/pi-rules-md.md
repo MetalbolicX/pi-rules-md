@@ -280,5 +280,7 @@ no code escape hatches.
   GREEN 13/13 + 17/17; full 294/294 (278 pre-existing + 16 new), typecheck
   0. Native workspace review lineage review-67114e7c967aae59: medium
   tier, review-reliability APPROVED and acknowledged (authority burned)
-  BEFORE commit, NO advisory findings. Independent verifier pending (runs
-  after commit per committed-range assess fallback). Next: T13 wiring.
+  BEFORE commit, NO advisory findings. Independent verifier PASS (13/13,
+  17/17, 294/294, typecheck 0; Record mirror confirmed correct against SDK
+  declarations; decision/mutation/reducer/hysteresis verified). Next: T13
+  wiring.
