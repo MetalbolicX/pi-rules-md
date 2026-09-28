@@ -1,8 +1,9 @@
 # Rule Format v1.1 (RULE-SPEC)
 
-Normative specification for pi-rules-md rule files. Everything here is
-enforced by the parser (`src/frontmatter.ts`); the pipeline
-(`src/engine.ts`) consumes the parsed data unchanged.
+Normative specification for pi-rules-md rule files and runtime behavior.
+Frontmatter shape and value constraints are enforced by the parser
+(`src/frontmatter.ts`); the discovery, matching, selection, and rendering
+pipeline applies the remaining semantics.
 
 ## 1. File placement and identity
 
@@ -99,7 +100,7 @@ positive pattern, then excluded if it matches any negation.
   activation mode; absent means "any".
 - `alwaysApply: true` skips activation and conditions entirely.
 - Before evaluation, the current turn prompt is checked for whole-word, case-insensitive language names: python/pytest → `*.py`, rust → `*.rs`, typescript → `*.ts`, javascript → `*.js`, golang → `*.go`, kotlin → `*.kt`, java → `*.java`, csharp → `*.cs`, ruby → `*.rb`. There is intentionally no bare `go` language trigger.
-- Matching rule `keywords` donate that rule's own positive globs to the intent set. Intent globs satisfy a rule's `globs` condition when covered by its patterns, independently of touched/existing path matches; intent alone does not activate rules lacking globs or bypass other conditions.
+- The current turn prompt is also checked for whole-word, case-insensitive matches against each rule's `keywords`; a hit donates that rule's positive globs to the intent set. Keyword metadata does not activate the rule by itself. Intent globs can satisfy a rule's `globs` condition independently of touched/existing path matches, but do not bypass other conditions.
 - **Intent globs never enter the context path pool** (`touchedPaths` or `existingPaths`) and do not expand the filesystem scan. They are a separate input to the globs-condition check.
 
 ### Pre-execution path capture
@@ -137,9 +138,10 @@ we do not parse paths from shell command strings.
 - After budget selection, presentation order is unconditional rules first
   (`alwaysApply: true` or no declared activation conditions), then
   `priority` DESC, then `index` ASC.
-- Token budget defaults to 2000 estimated tokens (`ceil(chars/4)`). The
-  shell's `PI_RULES_MAX_TOKENS` environment override is parsed as an integer;
-  absent, invalid, or non-positive values use the default.
+- Token budget defaults to 2000 estimated tokens (`ceil(chars/4)` of each
+  pinned rule body's content). The shell parses `PI_RULES_MAX_TOKENS` with
+  `parseInt`; an absent value, a value that parses to `NaN`, or a non-positive
+  parsed value uses the default. A positive parsed integer overrides it.
 - On-demand rules bypass pinned-rule dedupe and budget selection. Their bodies
   are never injected or counted against that budget. Instead, the rendered
   section appends an index headed exactly
@@ -163,10 +165,20 @@ we do not parse paths from shell command strings.
   `> Triggered by: <reasons>` when reasons exist, and `---` separators.
   Pinned rule bodies are injected verbatim with trailing blank-line
   normalization; the section ends with exactly one trailing newline.
-- The section is re-applied on **every** agent turn while any rule is
-  active (pi rebuilds its prompt sections per turn); identical content
-  produces no prompt diff (zero churn). When no rule is active and one
+- The section is re-applied on **every** agent turn while any pinned or
+  on-demand rule is active (Pi rebuilds its prompt sections per turn); identical
+  content produces no prompt diff (zero churn). When no rule is active and one
   was previously injected, the section is removed.
+
+### v1 behavior superseded by v1.1
+
+- Equal-content pinned rules no longer keep the first occurrence: the higher
+  priority wins, with the later discovery index breaking priority ties.
+- Budget selection no longer stops at the first non-fitting candidate. It skips
+  that candidate and continues; the first priority-sorted candidate is retained
+  even when it exceeds the budget.
+- The pinned entry heading is `## <description>` (not `## <id>`), matching the
+  renderer and its contract tests.
 
 ## 7. Errors (visible via `/rules`)
 
