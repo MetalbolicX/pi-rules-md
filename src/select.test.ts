@@ -22,7 +22,8 @@ const contentOfTokens = (tokens: number, fill = "x"): string => fill.repeat(toke
  * Builds a Rule with only the interesting fields set; the rest mirror the
  * parser's materialized defaults (same fixture policy as match.test.ts).
  */
-const ruleWith = (fields: { readonly id?: string; readonly priority?: number; readonly content?: string; readonly index?: number; readonly alwaysApply?: boolean; readonly globs?: readonly string[]; readonly tools?: readonly string[] }): Rule => ({
+const ruleWith = (fields: { readonly id?: string; readonly priority?: number; readonly content?: string; readonly index?: number; readonly alwaysApply?: boolean; readonly globs?: readonly string[]; readonly tools?: readonly string[]; readonly load?: "pinned" | "on-demand" }): Rule => ({
+	...(fields.load === undefined ? {} : { load: fields.load }),
 	id: ruleId(fields.id ?? "test-rule"),
 	path: normalizedPath(".pi/rules/test.md"),
 	source: "project",
@@ -95,8 +96,8 @@ describe("dedupeByContent", () => {
 	it("keeps distinct content in input order and accepts empty input", () => {
 		const a = ruleWith({ id: "a", content: "one" });
 		const b = ruleWith({ id: "b", content: "two" });
-		expect(dedupeByContent([a, b])).toEqual({ active: [a, b], dropped: [] });
-		expect(dedupeByContent([])).toEqual({ active: [], dropped: [] });
+		expect(dedupeByContent([a, b])).toEqual({ active: [a, b], onDemand: [], dropped: [] });
+		expect(dedupeByContent([])).toEqual({ active: [], onDemand: [], dropped: [] });
 	});
 });
 
@@ -190,7 +191,7 @@ describe("foldBudget", () => {
 	});
 
 	it("accepts empty input", () => {
-		expect(foldBudget([], 5)).toEqual({ active: [], dropped: [] });
+		expect(foldBudget([], 5)).toEqual({ active: [], onDemand: [], dropped: [] });
 	});
 
 	it("continues after the first overflow and admits later fitting rules", () => {
@@ -204,8 +205,25 @@ describe("foldBudget", () => {
 });
 
 describe("selectRules", () => {
+	it("partitions on-demand rules out of the pinned selection", () => {
+		const pinned = ruleWith({ id: "pinned" });
+		const reference = ruleWith({ id: "reference", load: "on-demand" });
+		expect(selectRules([pinned, reference], 100)).toMatchObject({ active: [pinned], onDemand: [reference] });
+	});
+
+	it("on-demand entries bypass dedupe (equal content kept)", () => {
+		const first = ruleWith({ id: "first", content: "same", load: "on-demand" });
+		const second = ruleWith({ id: "second", content: "same", load: "on-demand" });
+		expect(selectRules([first, second], 100).onDemand).toEqual([first, second]);
+	});
+
+	it("on-demand entries bypass the token budget", () => {
+		const reference = ruleWith({ id: "reference", content: contentOfTokens(100), load: "on-demand" });
+		expect(selectRules([reference], 0).onDemand).toEqual([reference]);
+	});
+
 	it("returns an empty selection for empty input", () => {
-		expect(selectRules([], 10)).toEqual({ active: [], dropped: [] });
+		expect(selectRules([], 10)).toEqual({ active: [], onDemand: [], dropped: [] });
 	});
 
 	it("composes dedupe → priority sort → budget fold", () => {

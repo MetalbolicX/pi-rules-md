@@ -28,6 +28,7 @@
  *   parse errors) minus the mtime cache: the cache lives in the composition
  *   root, which closes over it when building `deps.discover`.
  */
+import { homedir } from "node:os";
 import { evaluate } from "../src/engine.ts";
 import type { GlobScanner } from "../src/match.ts";
 import { transition } from "../src/state.ts";
@@ -119,7 +120,13 @@ export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineR
 	const discovered = await input.deps.discover({ cwd: ctx.cwd, isProjectTrusted: input.trusted });
 	const rules = [...discovered.rules]
 		.sort((a, b) => (a.source === b.source ? 0 : a.source === "project" ? -1 : 1))
-		.map((rule, index) => ({ ...rule, index }));
+		.map((rule, index) => {
+			const cwd = ctx.cwd.endsWith("/") && ctx.cwd.length > 1 ? ctx.cwd.slice(0, -1) : ctx.cwd;
+			const rulesRoot = rule.source === "project" ? `${cwd}/.pi/rules` : `${homedir()}/.pi/agent/rules`;
+			const prefix = `${rulesRoot}/`;
+			const relativePath = rule.relativePath ?? (rule.path.startsWith(prefix) ? normalizedPath(rule.path.slice(prefix.length)) : undefined);
+			return { ...rule, index, ...(relativePath === undefined ? {} : { relativePath }) };
+		});
 	const configuredBudget = Number.parseInt(process.env.PI_RULES_MAX_TOKENS ?? "", 10);
 	const budget = Number.isNaN(configuredBudget) || configuredBudget <= 0 ? input.deps.budget : configuredBudget;
 	const trace = await evaluate(rules, ctx, { scan: input.deps.scan, budget });

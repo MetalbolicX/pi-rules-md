@@ -118,10 +118,21 @@ positive pattern, then excluded if it matches any negation.
 - Token budget defaults to 2000 estimated tokens (`ceil(chars/4)`). The
   shell's `PI_RULES_MAX_TOKENS` environment override is parsed as an integer;
   absent, invalid, or non-positive values use the default.
+- On-demand rules bypass pinned-rule dedupe and budget selection. Their bodies
+  are never injected or counted against that budget. Instead, the rendered
+  section appends an index headed exactly
+  `## Reference rules available on demand`, with one `- <rules-relative-path>
+  — <description> (fetch with the read_rule tool)` line per rule. No index is
+  rendered when no on-demand rule
+  matched. Each rule's `relativePath` is a POSIX path relative to its source's
+  rules root, never an absolute path.
+- The evaluation trace partitions matched rules into pinned `active` and
+  `onDemand`, reports all matched rule file paths (including on-demand paths),
+  and estimates tokens over the complete rendered block including its index.
 - Rendered as one `pi-rules-md` system-prompt section: `# Rules` header,
-  framing line, one entry per selected rule (`## <description>`), optional
+  framing line, one entry per selected pinned rule (`## <description>`), optional
   `> Triggered by: <reasons>` when reasons exist, and `---` separators.
-  Rule bodies are injected verbatim with trailing blank-line
+  Pinned rule bodies are injected verbatim with trailing blank-line
   normalization; the section ends with exactly one trailing newline.
 - The section is re-applied on **every** agent turn while any rule is
   active (pi rebuilds its prompt sections per turn); identical content

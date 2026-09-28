@@ -146,7 +146,15 @@ export const evaluate = async (
 	const reasonsById = new Map(matched.map((entry) => [entry.rule.id, entry.reasons]));
 	const block = renderSection(
 		selection.active.map((rule) => ({ rule, reasons: reasonsById.get(rule.id) ?? [] })),
+		selection.onDemand,
 	);
 
-	return { evaluatedAt: ctx.now, results, selection, block };
+	return {
+		evaluatedAt: ctx.now,
+		results,
+		selection,
+		block,
+		matchedPaths: matched.map(({ rule }) => rule.path),
+		estimatedTokens: block === undefined ? 0 : Math.ceil(block.content.length / 4),
+	};
 };

@@ -78,13 +78,26 @@ const renderEntry = ({ rule, reasons }: RenderEntry): string =>
 const sha256 = (content: string): string => createHash("sha256").update(content).digest("hex");
 
 /**
- * Renders the selected entries, in the given order, into one section.
- * Returns `undefined` iff `entries` is empty — nothing to inject.
+ * Renders pinned entries and, last, a compact index of on-demand rules.
+ * Reference bodies are never included. Returns `undefined` iff both groups
+ * are empty.
  */
-export const renderSection = (entries: readonly RenderEntry[]): InjectionBlock | undefined => {
-	if (entries.length === 0) {
+export const renderSection = (
+	entries: readonly RenderEntry[],
+	onDemand: readonly Rule[] = [],
+): InjectionBlock | undefined => {
+	const references = onDemand.filter((rule) => rule.relativePath !== undefined);
+	if (entries.length === 0 && references.length === 0) {
 		return undefined;
 	}
-	const content = `# Rules\n\n${framing}\n\n${entries.map(renderEntry).join("\n\n---\n\n")}\n`;
+	const pinned = entries.map(renderEntry).join("\n\n---\n\n");
+	const referenceLines = references.map(
+		(rule) => `- ${rule.relativePath} — ${rule.description} (fetch with the read_rule tool)`,
+	);
+	const referenceIndex = referenceLines.length === 0
+		? ""
+		: `## Reference rules available on demand\n${referenceLines.join("\n")}`;
+	const body = [pinned, referenceIndex].filter((part) => part.length > 0).join("\n\n");
+	const content = `# Rules\n\n${framing}\n\n${body}\n`;
 	return { sectionId, content, contentHash: sha256(content) };
 };

@@ -18,7 +18,9 @@ import type { MatchReason, Rule } from "./types.ts";
  * Builds a Rule with only the interesting fields set; the rest mirror the
  * parser's materialized defaults (same fixture policy as match.test.ts).
  */
-const ruleWith = (fields: { readonly id?: string; readonly description?: string; readonly content?: string }): Rule => ({
+const ruleWith = (fields: { readonly id?: string; readonly description?: string; readonly content?: string; readonly relativePath?: string; readonly load?: "pinned" | "on-demand" }): Rule => ({
+	...(fields.relativePath === undefined ? {} : { relativePath: normalizedPath(fields.relativePath) }),
+	...(fields.load === undefined ? {} : { load: fields.load }),
 	id: ruleId(fields.id ?? "test-rule"),
 	path: normalizedPath(".pi/rules/test.md"),
 	source: "project",
@@ -92,6 +94,28 @@ describe("renderSection — block shape", () => {
 		const block = renderSection([entry(ruleWith({ id: "a", description: "padded", content: "Body line.\n\n\n" }))]);
 		expect(block?.content.endsWith("Body line.\n")).toBe(true);
 		expect(block?.content.includes("\n\n\n")).toBe(false);
+	});
+});
+
+describe("renderSection — on-demand reference index", () => {
+	it("renders an index line instead of an on-demand rule body", () => {
+		const reference = ruleWith({ id: "python-style", description: "Python style", content: "SECRET FULL BODY", relativePath: "python/style.md", load: "on-demand" });
+		const block = renderSection([], [reference]);
+		expect(block?.content).toContain("## Reference rules available on demand");
+		expect(block?.content).toContain("- python/style.md — Python style (fetch with the read_rule tool)");
+		expect(block?.content).not.toContain("SECRET FULL BODY");
+	});
+
+	it("appends the on-demand index after the pinned block", () => {
+		const pinned = ruleWith({ id: "pinned", description: "Pinned", content: "PINNED BODY" });
+		const reference = ruleWith({ id: "reference", description: "Reference", content: "FULL BODY", relativePath: "lang/ref.md", load: "on-demand" });
+		const block = renderSection([entry(pinned)], [reference]);
+		expect(block?.content.indexOf("PINNED BODY")).toBeLessThan(block?.content.indexOf("## Reference rules available on demand") ?? -1);
+	});
+
+	it("omits the index section when no on-demand rule matches", () => {
+		const block = renderSection([entry(ruleWith({ id: "pinned" }))]);
+		expect(block?.content).not.toContain("Reference rules available on demand");
 	});
 });
 

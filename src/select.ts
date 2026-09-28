@@ -58,7 +58,7 @@ export const dedupeByContent = (rules: readonly Rule[]): Selection => {
 		}
 	}
 	const active = [...winners.values()].sort((a, b) => a.inputIndex - b.inputIndex).map(({ rule }) => rule);
-	return { active, dropped };
+	return { active, onDemand: [], dropped };
 };
 
 /**
@@ -99,7 +99,7 @@ export const foldBudget = (rules: readonly Rule[], budget: number): Selection =>
 			dropped.push({ rule, cause: "budget" });
 		}
 	}
-	return { active, dropped };
+	return { active, onDemand: [], dropped };
 };
 
 /**
@@ -107,8 +107,10 @@ export const foldBudget = (rules: readonly Rule[], budget: number): Selection =>
  * fill → stability presentation order. Duplicates precede budget drops.
  */
 export const selectRules = (rules: readonly Rule[], budget: number): Selection => {
-	const deduped = dedupeByContent(rules);
+	const onDemand = rules.filter((rule) => rule.load === "on-demand");
+	const pinned = rules.filter((rule) => rule.load !== "on-demand");
+	const deduped = dedupeByContent(pinned);
 	const candidates = [...deduped.active].sort((a, b) => b.priority - a.priority || (a.index ?? 0) - (b.index ?? 0));
 	const budgeted = foldBudget(candidates, budget);
-	return { active: sortByPriority(budgeted.active), dropped: [...deduped.dropped, ...budgeted.dropped] };
+	return { active: sortByPriority(budgeted.active), onDemand, dropped: [...deduped.dropped, ...budgeted.dropped] };
 };

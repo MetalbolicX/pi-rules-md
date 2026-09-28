@@ -61,8 +61,9 @@ describe("Rule", () => {
 		content: "# TS rules\n\nUse tabs.",
 	};
 
-	it("carries an optional discovery index for shell-materialized ordering", () => {
+	it("carries shell-materialized discovery and rules-relative indices", () => {
 		expectTypeOf<Rule["index"]>().toEqualTypeOf<number | undefined>();
+		expectTypeOf<Rule["relativePath"]>().toEqualTypeOf<NormalizedPath | undefined>();
 		expectTypeOf(rule).toEqualTypeOf<Rule>();
 		expect(rule.version).toBe(1);
 	});
@@ -271,6 +272,7 @@ describe("Selection and InjectionBlock", () => {
 		};
 		const selection: Selection = {
 			active: [rule],
+			onDemand: [],
 			dropped: [{ rule, cause: "duplicate" }],
 		};
 		expect(selection.active).toHaveLength(1);

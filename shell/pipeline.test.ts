@@ -8,6 +8,7 @@
  * its own. All cycles run against in-memory `SessionState` values; the
  * orchestrator must return fresh state and never mutate its input.
  */
+import { homedir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { initialState } from "../src/state.ts";
 import type { SessionState } from "../src/state.ts";
@@ -98,12 +99,27 @@ describe("runInjectionCycle", () => {
 		// and the block exists exactly because something is active.
 		expect(result.trace.results).toHaveLength(1);
 		expect(result.trace.results[0]).toMatchObject({ matched: true, ruleId: rule.id });
-		expect(result.trace.selection.active).toEqual([{ ...rule, index: 0 }]);
+		expect(result.trace.selection.active).toEqual([{ ...rule, index: 0, relativePath: "always-on.md" }]);
 		expect(result.trace.block).toBe(result.block);
 		// The cycle drove discovery through the injected seam with the trust gate.
 		expect(recorded.discoverCalls).toEqual([{ cwd: normalizedPath("/work"), isProjectTrusted: true }]);
 		// Touched-only rules never widen the exists-scan.
 		expect(recorded.scanCalls).toEqual([]);
+	});
+
+	it("materializes project-first indexes and source-root-relative paths", async () => {
+		const global = {
+			...ruleWith({ id: "global" }),
+			source: "global" as const,
+			path: normalizedPath(`${homedir()}/.pi/agent/rules/python/style.md`),
+		};
+		const project = ruleWith({ id: "project" });
+		const { deps } = depsWith([global, project]);
+		const result = await runInjectionCycle(inputWith(initialState, deps));
+		expect(result.trace.selection.active.map(({ id, index, relativePath }) => ({ id, index, relativePath }))).toEqual([
+			{ id: project.id, index: 0, relativePath: "project.md" },
+			{ id: global.id, index: 1, relativePath: "python/style.md" },
+		]);
 	});
 
 	it("re-applies on an identical second cycle: still patch, state folds to the same value", async () => {
@@ -188,8 +204,8 @@ describe("runInjectionCycle", () => {
 		const input = { ...inputWith(initialState, deps) };
 		const result = await runInjectionCycle({ ...input, deps: { ...deps, budget: 15 } });
 
-		expect(result.trace.selection.active).toEqual([{ ...big, index: 0 }]);
-		expect(result.trace.selection.dropped).toEqual([{ rule: { ...other, index: 1 }, cause: "budget" }]);
+		expect(result.trace.selection.active).toEqual([{ ...big, index: 0, relativePath: "big.md" }]);
+		expect(result.trace.selection.dropped).toEqual([{ rule: { ...other, index: 1, relativePath: "other.md" }, cause: "budget" }]);
 		expect(result.decision).toEqual({ action: "patch" });
 		expect(result.block).toBeDefined();
 	});

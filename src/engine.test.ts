@@ -61,9 +61,13 @@ const ruleWith = (fields: {
 	readonly priority?: number;
 	readonly alwaysApply?: boolean;
 	readonly content?: string;
+	readonly load?: "pinned" | "on-demand";
+	readonly relativePath?: string;
 }): Rule => ({
+	...(fields.load === undefined ? {} : { load: fields.load }),
+	...(fields.relativePath === undefined ? {} : { relativePath: normalizedPath(fields.relativePath) }),
 	id: ruleId(fields.id ?? "test-rule"),
-	path: normalizedPath(fields.source === "global" ? "~/.pi/agent/rules/test.md" : ".pi/rules/test.md"),
+	path: normalizedPath(fields.source === "global" ? `~/.pi/agent/rules/${fields.id ?? "test-rule"}.md` : `.pi/rules/${fields.id ?? "test-rule"}.md`),
 	source: fields.source ?? "project",
 	description: "test rule",
 	...(fields.globs === undefined ? {} : { globs: fields.globs }),
@@ -365,10 +369,22 @@ describe("evaluate — selection and rendering", () => {
 		]);
 	});
 
+	it("matched paths include on-demand rules and the trace records the partition", async () => {
+		const pinned = ruleWith({ id: "pinned", globs: ["src/**"], content: "PINNED" });
+		const reference = ruleWith({ id: "reference", globs: ["src/**"], load: "on-demand", relativePath: "python/style.md", content: "FULL REFERENCE BODY" });
+		const trace = await evaluate([pinned, reference], contextWith({ touchedPaths: ["src/a.ts"] }), { scan: scannerReturning([]).scanner, budget: 0 });
+		expect(trace.selection.active.map((rule) => rule.id)).toEqual([ruleId("pinned")]);
+		expect(trace.selection.onDemand).toEqual([reference]);
+		expect(trace.matchedPaths).toEqual([pinned.path, reference.path]);
+		expect(trace.block?.content).toContain("- python/style.md — test rule (fetch with the read_rule tool)");
+		expect(trace.block?.content).not.toContain("FULL REFERENCE BODY");
+		expect(trace.estimatedTokens).toBe(Math.ceil((trace.block?.content.length ?? 0) / 4));
+	});
+
 	it("returns block undefined when nothing is active", async () => {
 		const empty = await evaluate([], contextWith({}), { scan: scannerReturning([]).scanner, budget: 100 });
 		expect(empty.block).toBeUndefined();
-		expect(empty.selection).toEqual({ active: [], dropped: [] });
+		expect(empty.selection).toEqual({ active: [], onDemand: [], dropped: [] });
 		const allUnmatched = await evaluate(
 			[ruleWith({ id: "no-hit", globs: ["src/**/*.ts"] })],
 			contextWith({ touchedPaths: ["docs/x.md"] }),

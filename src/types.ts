@@ -57,6 +57,8 @@ export interface Rule {
 	readonly index?: number;
 	/** Source file this rule was loaded from (normalized). */
 	readonly path: NormalizedPath;
+	/** Rules-root-relative POSIX path used by the on-demand reference index. */
+	readonly relativePath?: NormalizedPath;
 	/** Whether the rule came from the global or the project rules directory. */
 	readonly source: RuleSource;
 	/** Short human-readable description from frontmatter. */
@@ -178,9 +180,10 @@ export interface DroppedRule {
 	readonly cause: DropCause;
 }
 
-/** Final selection output: rules to inject plus those dropped, with causes. */
+/** Final selection output: pinned rules, on-demand references, and drops. */
 export interface Selection {
 	readonly active: readonly Rule[];
+	readonly onDemand: readonly Rule[];
 	readonly dropped: readonly DroppedRule[];
 }
 
@@ -202,6 +205,10 @@ export interface InjectionBlock {
 export interface EvaluationTrace {
 	/** Evaluation time, copied from `ctx.now` (keeps traces deterministic). */
 	readonly evaluatedAt: number;
+	/** Rule file paths for all matched rules, including on-demand references. */
+	readonly matchedPaths: readonly NormalizedPath[];
+	/** Approximate tokens in the complete rendered block, including its index. */
+	readonly estimatedTokens: number;
 	/**
 	 * Final merged outcome for every rule, in rule order: the path condition
 	 * AND all declared non-path conditions. Skipped (trust-gated) rules appear
