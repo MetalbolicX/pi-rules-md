@@ -35,7 +35,7 @@ export interface RuleMeta {
 }
 
 /** Metadata keys validated directly here; condition keys come from the table. */
-const METADATA_KEYS: readonly string[] = ["description", "enforcement", "priority", "version"];
+const METADATA_KEYS: readonly string[] = ["description", "enforcement", "keywords", "load", "priority", "version"];
 
 /** Every accepted frontmatter key: the six condition keys (table) + metadata. */
 const KNOWN_KEYS: ReadonlySet<string> = new Set<string>([...CONDITION_KEYS, ...METADATA_KEYS]);
@@ -223,6 +223,17 @@ export const parseRule = (raw: string, meta: RuleMeta): Result<Rule, RuleError> 
 		return err(invalidValue("enforcement", `"enforce", "recommend", or "inform"`, file));
 	}
 
+	const loadValue = frontmatter["load"];
+	if (loadValue !== undefined && loadValue !== "pinned" && loadValue !== "on-demand") {
+		return err(invalidValue("load", `"pinned" or "on-demand"`, file));
+	}
+
+	const keywordsValue = frontmatter["keywords"];
+	if (keywordsValue !== undefined && (!Array.isArray(keywordsValue) || keywordsValue.some((keyword) => typeof keyword !== "string"))) {
+		return err(invalidValue("keywords", "an array of strings", file));
+	}
+	const keywords = Array.isArray(keywordsValue) ? keywordsValue.map((keyword: string) => keyword.trim()) : undefined;
+
 	const alwaysApplyParsed = parseConditionField("alwaysApply", frontmatter, file);
 	if (!alwaysApplyParsed.ok) {
 		return err(alwaysApplyParsed.error);
@@ -259,6 +270,7 @@ export const parseRule = (raw: string, meta: RuleMeta): Result<Rule, RuleError> 
 		match: matchValue ?? "both",
 		priority: priorityValue ?? 0,
 		enforcement: enforcementValue ?? "inform",
+		load: loadValue ?? "pinned",
 		alwaysApply: alwaysApplyValue ?? false,
 		version: 1,
 		content: trimBlankEdges(split.content),
@@ -266,6 +278,7 @@ export const parseRule = (raw: string, meta: RuleMeta): Result<Rule, RuleError> 
 		...(tools === undefined ? {} : { tools }),
 		...(branchValue === undefined ? {} : { branch: branchValue }),
 		...(modelValue === undefined ? {} : { model: modelValue }),
+		...(keywords === undefined ? {} : { keywords }),
 	};
 	return ok(rule);
 };

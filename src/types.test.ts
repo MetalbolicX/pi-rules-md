@@ -83,6 +83,10 @@ describe("Rule", () => {
 		expect(minimal.tools).toBeUndefined();
 		expect(minimal.branch).toBeUndefined();
 		expect(minimal.model).toBeUndefined();
+		expectTypeOf<Rule["load"]>().toEqualTypeOf<"pinned" | "on-demand" | undefined>();
+		expectTypeOf<Rule["keywords"]>().toEqualTypeOf<string[] | undefined>();
+		expect(minimal.load).toBeUndefined();
+		expect(minimal.keywords).toBeUndefined();
 	});
 
 	it("rejects explicit undefined on optional fields (exactOptionalPropertyTypes)", () => {

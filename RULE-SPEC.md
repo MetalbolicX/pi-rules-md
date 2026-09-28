@@ -1,4 +1,4 @@
-# Rule Format v1 (RULE-SPEC)
+# Rule Format v1.1 (RULE-SPEC)
 
 Normative specification for pi-rules-md rule files. Everything here is
 enforced by the parser (`src/frontmatter.ts`); the pipeline
@@ -43,6 +43,8 @@ branch: main
 model: sonnet
 priority: 10
 enforcement: enforce
+load: pinned
+keywords: [typescript, style]
 alwaysApply: false
 ---
 The rule body: instructions injected verbatim into the system prompt
@@ -62,11 +64,13 @@ section when the rule is active.
 | `model` | string | ✘ | — | Active only when the current model name matches. |
 | `priority` | integer | ✘ | `0` | Higher wins in selection; ties keep discovery order (stable). |
 | `enforcement` | `enforce` \| `recommend` \| `inform` | ✘ | `inform` | Parsed and validated; does NOT affect selection or rendering in v1 (reserved for future emphasis). |
+| `load` | `pinned` \| `on-demand` | ✘ | `pinned` | Loading policy metadata; materialized by parsing and does not itself alter condition matching. |
+| `keywords` | string[] | ✘ | — | Intent-donation metadata; trimmed on parse and does not itself gate matching. Empty arrays are allowed. |
 | `alwaysApply` | boolean | ✘ | `false` | When true the rule bypasses ALL condition matching (still subject to the trust gate for project rules). |
 
 **Unknown keys are rejected** (strict schema). Types must match exactly
-(`globs` entries are strings; `priority` is an integer; `version` is the
-number `1`).
+(`globs` and `keywords` entries are strings; `load` is exactly `pinned` or
+`on-demand`; `priority` is an integer; `version` is the number `1`).
 
 ## 4. Activation constraints
 
@@ -105,8 +109,8 @@ positive pattern, then excluded if it matches any negation.
   top-down; the fold stops at the first rule that does not fit — every
   remaining rule is dropped with cause `budget` (no best-effort fill).
 - Rendered as one `pi-rules-md` system-prompt section: `# Rules` header,
-  framing line, one entry per selected rule (`## <id>`,
-  `> Triggered by: <reasons>` when reasons exist), `---` separators.
+  framing line, one entry per selected rule (`## <description>`), optional
+  `> Triggered by: <reasons>` when reasons exist, and `---` separators.
   Rule bodies are injected verbatim with trailing blank-line
   normalization; the section ends with exactly one trailing newline.
 - The section is re-applied on **every** agent turn while any rule is

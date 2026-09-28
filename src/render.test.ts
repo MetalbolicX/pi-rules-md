@@ -48,6 +48,12 @@ describe("renderSection — block shape", () => {
 		expect(renderSection([])).toBeUndefined();
 	});
 
+	it("renders description as rule heading", () => {
+		const block = renderSection([entry(ruleWith({ id: "heading-id", description: "Description heading" }))]);
+		expect(block?.content).toContain("## Description heading");
+		expect(block?.content).not.toContain("## heading-id");
+	});
+
 	it("labels every block with the fixed section id", () => {
 		const block = renderSection([entry(ruleWith({}))]);
 		expect(block?.sectionId).toBe("pi-rules-md");

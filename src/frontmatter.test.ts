@@ -61,6 +61,7 @@ describe("parseRule — happy path", () => {
 			model: "claude",
 			priority: 10,
 			enforcement: "enforce",
+			load: "pinned",
 			alwaysApply: false,
 			version: 1,
 			content: "# TS rules\n\nUse tabs.\n\nDone.",
@@ -81,6 +82,31 @@ describe("parseRule — happy path", () => {
 		const rule = okOf(parseRule(fm("description: x\nversion: 1\nglobs: src/**/*.ts"), projectMeta));
 		expect(rule.alwaysApply).toBe(false);
 		expect(rule.globs).toEqual(["src/**/*.ts"]);
+	});
+
+	it("accepts load: pinned", () => {
+		const rule = okOf(parseRule(fm("description: x\nversion: 1\nalwaysApply: true\nload: pinned"), projectMeta));
+		expect(rule.load).toBe("pinned");
+	});
+
+	it("accepts load: on-demand", () => {
+		const rule = okOf(parseRule(fm("description: x\nversion: 1\nalwaysApply: true\nload: on-demand"), projectMeta));
+		expect(rule.load).toBe("on-demand");
+	});
+
+	it("defaults load to pinned when absent", () => {
+		const rule = okOf(parseRule(MINIMAL, projectMeta));
+		expect(rule.load).toBe("pinned");
+	});
+
+	it("accepts keywords as string array", () => {
+		const rule = okOf(parseRule(fm('description: x\nversion: 1\nalwaysApply: true\nkeywords: [" alpha ", beta]'), projectMeta));
+		expect(rule.keywords).toEqual(["alpha", "beta"]);
+	});
+
+	it("rejects keywords with non-string entries", () => {
+		const error = errOf(parseRule(fm("description: x\nversion: 1\nalwaysApply: true\nkeywords: [alpha, 2]"), projectMeta));
+		expect(error.code).toBe("invalid-value");
 	});
 
 	it("derives a distinct id per source for the same path", () => {
@@ -222,6 +248,12 @@ describe("parseRule — strict validation", () => {
 		);
 		expect(error.code).toBe("invalid-value");
 		expect(error.message).toContain("match");
+	});
+
+	it("rejects unknown load value", () => {
+		const error = errOf(parseRule(fm("description: x\nversion: 1\nalwaysApply: true\nload: later"), projectMeta));
+		expect(error.code).toBe("invalid-value");
+		expect(error.message).toContain("load");
 	});
 
 	it("rejects an unknown enforcement value", () => {

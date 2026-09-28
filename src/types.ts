@@ -59,6 +59,10 @@ export interface Rule {
 	readonly source: RuleSource;
 	/** Short human-readable description from frontmatter. */
 	readonly description: string;
+	/** Loading policy metadata; absent in manually constructed rules, parsed rules default to pinned. */
+	readonly load?: "pinned" | "on-demand";
+	/** Intent-donation metadata; never participates in condition matching. */
+	readonly keywords?: string[];
 	/**
 	 * Glob patterns the rule reacts to. Patterns OR across; a leading `!`
 	 * negates a pattern. Absent means "no glob trigger".
