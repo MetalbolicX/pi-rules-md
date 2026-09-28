@@ -63,8 +63,10 @@ const ruleWith = (fields: {
 	readonly content?: string;
 	readonly load?: "pinned" | "on-demand";
 	readonly relativePath?: string;
+	readonly keywords?: readonly string[];
 }): Rule => ({
 	...(fields.load === undefined ? {} : { load: fields.load }),
+	...(fields.keywords === undefined ? {} : { keywords: [...fields.keywords] }),
 	...(fields.relativePath === undefined ? {} : { relativePath: normalizedPath(fields.relativePath) }),
 	id: ruleId(fields.id ?? "test-rule"),
 	path: normalizedPath(fields.source === "global" ? `~/.pi/agent/rules/${fields.id ?? "test-rule"}.md` : `.pi/rules/${fields.id ?? "test-rule"}.md`),
@@ -123,6 +125,15 @@ const deepFreeze = <T>(value: T): T => {
 	}
 	return value;
 };
+
+describe("evaluate — intent", () => {
+	it("match reason records intent satisfaction", async () => {
+		const trace = await evaluate([ruleWith({ globs: ["**/*.py"] })], contextWith({}), {
+			scan: async () => [], budget: 2000, prompt: "Please use Python",
+		});
+		expect(trace.results[0]).toMatchObject({ matched: true, reasons: [{ kind: "glob", pattern: "intent: *.py" }] });
+	});
+});
 
 describe("evaluate — exists-scan enrichment", () => {
 	it("scans once with only the positive globs of exists/both rules; touched-only rules never widen the scan", async () => {

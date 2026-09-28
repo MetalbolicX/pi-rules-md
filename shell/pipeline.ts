@@ -73,6 +73,8 @@ export interface PipelineInput {
 	readonly state: SessionState;
 	/** Current working directory. */
 	readonly cwd: string;
+	/** Current turn prompt; intent detection never adds paths to the context pools. */
+	readonly prompt: string;
 	/** Evaluation time — injected for determinism. */
 	readonly now: Date;
 	/** Whether the project is trusted (gates project rules). */
@@ -129,7 +131,7 @@ export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineR
 		});
 	const configuredBudget = Number.parseInt(process.env.PI_RULES_MAX_TOKENS ?? "", 10);
 	const budget = Number.isNaN(configuredBudget) || configuredBudget <= 0 ? input.deps.budget : configuredBudget;
-	const trace = await evaluate(rules, ctx, { scan: input.deps.scan, budget });
+	const trace = await evaluate(rules, ctx, { scan: input.deps.scan, budget, prompt: input.prompt });
 
 	const block = trace.block;
 	const decision = injectionDecision(block, input.state.lastInjectedHash);

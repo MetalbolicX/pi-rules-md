@@ -71,12 +71,14 @@ const ruleWith = (fields: {
 const contextWith = (fields: {
 	readonly touchedPaths?: readonly string[];
 	readonly existingPaths?: readonly string[];
+	readonly intentGlobs?: readonly string[];
 }): EvaluationContext => ({
 	now: 0,
 	cwd: normalizedPath("/proj"),
 	isProjectTrusted: true,
 	touchedPaths: (fields.touchedPaths ?? []).map(normalizedPath),
 	existingPaths: (fields.existingPaths ?? []).map(normalizedPath),
+	...(fields.intentGlobs === undefined ? {} : { intentGlobs: fields.intentGlobs }),
 	toolNames: [],
 });
 
@@ -97,6 +99,23 @@ describe("deriveScanPatterns", () => {
 
 	it("returns no patterns for an empty rule list", () => {
 		expect(deriveScanPatterns([])).toEqual([]);
+	});
+});
+
+describe("intent globs", () => {
+	it("intent globs satisfy a globs condition without any path in the pool", () => {
+		const result = matchRule(ruleWith({ globs: ["**/*.py"] }), contextWith({ intentGlobs: ["*.py"] }));
+		expect(result).toMatchObject({ matched: true, reasons: [{ kind: "glob", pattern: "intent: *.py" }] });
+	});
+
+	it("intent globs never enter the context path pool", () => {
+		const ctx = contextWith({ intentGlobs: ["*.py"] });
+		expect(ctx.touchedPaths).toEqual([]);
+		expect(ctx.existingPaths).toEqual([]);
+	});
+
+	it("does not let an unrelated intent glob satisfy rule globs", () => {
+		expect(matchRule(ruleWith({ globs: ["**/*.rs"] }), contextWith({ intentGlobs: ["*.py"] })).matched).toBe(false);
 	});
 });
 

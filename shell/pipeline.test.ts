@@ -73,6 +73,7 @@ const depsWith = (rules: readonly Rule[], errors: readonly RuleError[] = []): { 
 const inputWith = (state: SessionState, deps: PipelineDeps): PipelineInput => ({
 	state,
 	cwd: "/work",
+	prompt: "",
 	now: NOW,
 	trusted: true,
 	session: { toolNames: ["read", "edit"], model: "test-model", branch: undefined },

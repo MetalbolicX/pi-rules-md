@@ -31,6 +31,7 @@
  * data built by the composed stages.
  */
 import { branchPredicate, modelPredicate, toolsPredicate } from "./conditions/predicates.ts";
+import { detectIntentGlobs } from "./intent.ts";
 import { matchRule, withExistingPaths } from "./match.ts";
 import type { GlobScanner } from "./match.ts";
 import { renderSection } from "./render.ts";
@@ -43,6 +44,8 @@ export interface EvaluationOptions {
 	readonly scan: GlobScanner;
 	/** Token budget handed to the selection pipeline. */
 	readonly budget: number;
+	/** Current turn prompt used only for intent preload detection. */
+	readonly prompt?: string;
 }
 
 /** Trust gate (defense-in-depth): project rules require a trusted project. */
@@ -118,9 +121,11 @@ export const evaluate = async (
 ): Promise<EvaluationTrace> => {
 	// 2. Enrich a copy of the context — scanning ONLY for rules whose match
 	// mode consults existing paths; trust-gated rules are excluded entirely.
+	const intentGlobs = opts.prompt === undefined ? [] : detectIntentGlobs(opts.prompt, rules);
+	const intentContext: EvaluationContext = { ...ctx, intentGlobs };
 	const candidates = rules.filter((rule) => !isTrustGated(rule, ctx));
 	const enriched = await withExistingPaths(
-		ctx,
+		intentContext,
 		candidates.filter((rule) => rule.match === "exists" || rule.match === "both"),
 		opts.scan,
 	);
@@ -129,7 +134,7 @@ export const evaluate = async (
 	const outcomes = rules.map((rule) =>
 		isTrustGated(rule, ctx)
 			? { rule, result: trustGateResult(rule, ctx) }
-			: { rule, result: evaluateRule(rule, enriched) },
+			: { rule, result: evaluateRule(rule, { ...enriched, intentGlobs }) },
 	);
 	const results = outcomes.map((outcome) => outcome.result);
 

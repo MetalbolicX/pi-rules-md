@@ -138,6 +138,8 @@ export interface EvaluationContext {
 	readonly touchedPaths: readonly NormalizedPath[];
 	/** Paths confirmed to exist in the project (normalized). */
 	readonly existingPaths: readonly NormalizedPath[];
+	/** Prompt-inferred globs; deliberately separate from both path pools. */
+	readonly intentGlobs?: readonly string[];
 	/** Tool names available/active in this session. */
 	readonly toolNames: readonly string[];
 	/** Active model name, when known. */

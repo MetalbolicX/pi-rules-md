@@ -95,7 +95,10 @@ export const matchRule = (rule: Rule, ctx: EvaluationContext): MatchResult => {
 		...(rule.match === "touched" ? [] : ctx.existingPaths),
 	];
 	const hits = pool.filter(matchesRule);
-	if (hits.length === 0) {
+	const intentHits = (ctx.intentGlobs ?? []).filter((intent) =>
+		globs.some((pattern) => !pattern.startsWith("!") && globMatcher([pattern])(normalizedPath(`intent/${intent.slice(intent.lastIndexOf("/") + 1)}`))),
+	);
+	if (hits.length === 0 && intentHits.length === 0) {
 		return { matched: false, ruleId: rule.id, reason: unmatchedReason(rule.match, globs) };
 	}
 	// Attribute one reason per positive pattern that matched at least one
@@ -107,6 +110,7 @@ export const matchRule = (rule: Rule, ctx: EvaluationContext): MatchResult => {
 			reasons.push({ kind: "glob", pattern });
 		}
 	}
+	for (const pattern of intentHits) reasons.push({ kind: "glob", pattern: `intent: ${pattern}` });
 	return { matched: true, ruleId: rule.id, reasons };
 };
 

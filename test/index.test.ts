@@ -146,8 +146,9 @@ const emitStart = async (
 	ctx: ExtensionContextLike,
 	sections: Record<string, string> = {},
 	selectedTools: readonly string[] = ["read", "edit"],
+	prompt = "",
 ): Promise<Record<string, string>> => {
-	const event: BeforeAgentStartLike = { type: "before_agent_start", systemPromptOptions: { sections, selectedTools } };
+	const event: BeforeAgentStartLike = { type: "before_agent_start", prompt, systemPromptOptions: { sections, selectedTools } };
 	for (const handler of api.starts) {
 		await handler(event, ctx);
 	}
@@ -268,6 +269,13 @@ describe("createRulesExtension event folding", () => {
 });
 
 describe("createRulesExtension before_agent_start cycle", () => {
+	it("threads prompt from the before_agent_start event into evaluation", async () => {
+		const { deps } = depsWith({ rules: [ruleWith({ id: "python", globs: ["**/*.py"], alwaysApply: false })] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const sections = await emitStart(api, handlerCtx("/work"), {}, ["read"], "Please help with Python");
+		expect(sections).toHaveProperty("pi-rules-md");
+	});
 	it("patches sections per applyInjection semantics and stores the last trace for /rules", async () => {
 		const rules = [ruleWith({ id: "always-on" }), ruleWith({ id: "never", globs: ["nope/**/*.md"], alwaysApply: false })];
 		const { deps, discoverCalls } = depsWith({ rules });

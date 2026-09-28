@@ -36,6 +36,7 @@ export interface ExtensionContextLike {
 /** Mirror of pi `BeforeAgentStartEvent` limited to the wiring's mutation surface. */
 export interface BeforeAgentStartLike {
 	readonly type: "before_agent_start";
+	readonly prompt: string;
 	readonly systemPromptOptions: {
 		readonly sections: Record<string, string>;
 		/** Real source for the evaluation context's tool names (normalized options). */
@@ -112,6 +113,7 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 			const result = await runInjectionCycle({
 				state,
 				cwd: ctx.cwd,
+				prompt: event.prompt,
 				now: deps.now(),
 				trusted: ctx.isProjectTrusted(),
 				session: {

@@ -65,7 +65,7 @@ section when the rule is active.
 | `priority` | integer | ✘ | `0` | Higher wins in selection; ties keep discovery order (stable). |
 | `enforcement` | `enforce` \| `recommend` \| `inform` | ✘ | `inform` | Parsed and validated; does NOT affect selection or rendering in v1 (reserved for future emphasis). |
 | `load` | `pinned` \| `on-demand` | ✘ | `pinned` | Loading policy metadata; materialized by parsing and does not itself alter condition matching. |
-| `keywords` | string[] | ✘ | — | Intent-donation metadata; trimmed on parse and does not itself gate matching. Empty arrays are allowed. |
+| `keywords` | string[] | ✘ | — | Intent-donation metadata; trimmed on parse and does not itself gate matching. When a keyword matches a whole word in the current turn prompt (case-insensitive), this rule's positive globs are donated to intent pre-loading. Empty arrays are allowed. |
 | `alwaysApply` | boolean | ✘ | `false` | When true the rule bypasses ALL condition matching (still subject to the trust gate for project rules). |
 
 **Unknown keys are rejected** (strict schema). Types must match exactly
@@ -98,6 +98,9 @@ positive pattern, then excluded if it matches any negation.
 - Condition keys (`tools`, `branch`, `model`) are AND-ed on top of the
   activation mode; absent means "any".
 - `alwaysApply: true` skips activation and conditions entirely.
+- Before evaluation, the current turn prompt is checked for whole-word, case-insensitive language names: python/pytest → `*.py`, rust → `*.rs`, typescript → `*.ts`, javascript → `*.js`, golang → `*.go`, kotlin → `*.kt`, java → `*.java`, csharp → `*.cs`, ruby → `*.rb`. There is intentionally no bare `go` language trigger.
+- Matching rule `keywords` donate that rule's own positive globs to the intent set. Intent globs satisfy a rule's `globs` condition when covered by its patterns, independently of touched/existing path matches; intent alone does not activate rules lacking globs or bypass other conditions.
+- **Intent globs never enter the context path pool** (`touchedPaths` or `existingPaths`) and do not expand the filesystem scan. They are a separate input to the globs-condition check.
 
 ## 6. Selection, budget, rendering
 
