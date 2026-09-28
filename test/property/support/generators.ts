@@ -328,6 +328,7 @@ export const randomRule = (rng: Seeded, index: number, content?: string): Rule =
 	const model = rng.next() < 0.2 ? rng.pick(MODEL_POOL) : undefined;
 	return {
 		id: ruleId(`rule-${index}`),
+		index,
 		path: normalizedPath(`rules/rule-${index}.md`),
 		source: rng.pick(SOURCES),
 		description: `${rng.pick(WORDS)} ${rng.pick(WORDS)} rule`,

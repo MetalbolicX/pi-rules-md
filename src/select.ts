@@ -5,18 +5,13 @@
  * stages, each exported so the engine (task 8) and tests can drive them
  * independently, composed by `selectRules`:
  *
- * 1. `dedupeByContent` — rule identity is the sha-256 of the rule content
- *    (node:crypto). The FIRST occurrence in input order wins; later rules
- *    with identical content drop with cause "duplicate". Runs BEFORE
- *    sorting, so "first" is input order, never priority order.
- * 2. `sortByPriority` — priority DESCENDING, stable on ties (input order
- *    preserved; Array.prototype.sort is stable per spec).
- * 3. `foldBudget` — walks the sorted rules and stops at the FIRST rule
- *    whose token estimate does not fit the remaining budget; that rule and
- *    the whole remainder drop with cause "budget". Priority-honoring and
- *    deterministic: no backtracking, no "skip and try the next". Content
- *    with zero estimated tokens still consumes its rule slot and fits
- *    whenever the remaining budget is non-negative (including budget 0).
+ * 1. `dedupeByContent` — equal content keeps higher priority, then later
+ *    discovery index; losers drop with cause "duplicate".
+ * 2. Candidates are budgeted by priority DESC, then discovery index ASC.
+ * 3. `foldBudget` skips non-fitting candidates and continues; the first
+ *    candidate is always kept if there is at least one candidate.
+ * 4. Presentation order (unconditional group, priority DESC, index ASC) is
+ *    applied to survivors only, after budget selection.
  *
  * Token estimate: `estimateTokens` is ceil(chars / 4) of the rule content —
  * a deliberate approximation (~4 chars per token, no tokenizer). Budgeting
@@ -40,66 +35,80 @@ export const estimateTokens = (rule: Rule): number => Math.ceil(rule.content.len
 export const contentHash = (rule: Rule): string => createHash("sha256").update(rule.content).digest("hex");
 
 /**
- * Stage 1 — drops later rules whose content equals an earlier rule's
- * (sha-256 content hash). First occurrence in input order wins; priorities
- * are irrelevant at this stage by design (dedupe precedes the sort).
+ * Stage 1 — for equal content, higher priority wins; ties go to the later
+ * discovery index. Input order is only a fallback when indices are absent.
  */
 export const dedupeByContent = (rules: readonly Rule[]): Selection => {
-	const seen = new Set<string>();
-	const active: Rule[] = [];
+	const winners = new Map<string, { rule: Rule; inputIndex: number }>();
 	const dropped: DroppedRule[] = [];
-	for (const rule of rules) {
+	for (const [inputIndex, rule] of rules.entries()) {
 		const hash = contentHash(rule);
-		if (seen.has(hash)) {
-			dropped.push({ rule, cause: "duplicate" });
+		const previous = winners.get(hash);
+		if (previous === undefined) {
+			winners.set(hash, { rule, inputIndex });
 			continue;
 		}
-		seen.add(hash);
-		active.push(rule);
+		const ruleIndex = rule.index ?? inputIndex;
+		const previousIndex = previous.rule.index ?? previous.inputIndex;
+		if (rule.priority > previous.rule.priority || (rule.priority === previous.rule.priority && ruleIndex > previousIndex)) {
+			dropped.push({ rule: previous.rule, cause: "duplicate" });
+			winners.set(hash, { rule, inputIndex });
+		} else {
+			dropped.push({ rule, cause: "duplicate" });
+		}
 	}
+	const active = [...winners.values()].sort((a, b) => a.inputIndex - b.inputIndex).map(({ rule }) => rule);
 	return { active, dropped };
 };
 
 /**
- * Stage 2 — priority DESCENDING, stable on ties (input order preserved).
- * Pure: returns a new sorted array, never mutates the input.
+ * Presentation order: rules without declared activation conditions first,
+ * then priority DESCENDING, then stable discovery index ASC. Pure reorder.
  */
+const isUnconditional = (rule: Rule): boolean =>
+	rule.alwaysApply ||
+		((rule.globs === undefined || rule.globs.length === 0) &&
+			(rule.tools === undefined || rule.tools.length === 0) &&
+			rule.branch === undefined &&
+			rule.model === undefined);
+
 export const sortByPriority = (rules: readonly Rule[]): readonly Rule[] =>
-	[...rules].sort((a, b) => b.priority - a.priority);
+	[...rules]
+		.map((rule, inputIndex) => ({ rule, inputIndex }))
+		.sort((a, b) =>
+			Number(isUnconditional(b.rule)) - Number(isUnconditional(a.rule)) ||
+			b.rule.priority - a.rule.priority ||
+			(a.rule.index ?? a.inputIndex) - (b.rule.index ?? b.inputIndex),
+		)
+		.map(({ rule }) => rule);
 
 /**
- * Stage 3 — token-budget fold. Admits rules while their estimate fits the
- * remaining budget; stops at the FIRST rule that does not fit and drops it
- * and every rule after it with cause "budget". A zero-token rule fits
- * whenever the remaining budget is non-negative and still consumes its
- * active slot.
+ * Budget fold skips non-fitting entries and continues. The first candidate
+ * is retained even when it exceeds the budget.
  */
 export const foldBudget = (rules: readonly Rule[], budget: number): Selection => {
 	const active: Rule[] = [];
 	const dropped: DroppedRule[] = [];
 	let remaining = budget;
-	let exhausted = false;
-	for (const rule of rules) {
+	for (const [index, rule] of rules.entries()) {
 		const tokens = estimateTokens(rule);
-		if (exhausted || tokens > remaining) {
-			exhausted = true;
+		if (index === 0 || tokens <= remaining) {
+			active.push(rule);
+			remaining -= tokens;
+		} else {
 			dropped.push({ rule, cause: "budget" });
-			continue;
 		}
-		active.push(rule);
-		remaining -= tokens;
 	}
 	return { active, dropped };
 };
 
 /**
- * Composed pipeline: dedupe (input order) → sort (priority desc, stable) →
- * budget fold. Drops are stage-ordered: duplicates first (input order),
- * then budget drops (priority-sorted order).
+ * Composed pipeline: priority/index budget order → dedupe → greedy budget
+ * fill → stability presentation order. Duplicates precede budget drops.
  */
 export const selectRules = (rules: readonly Rule[], budget: number): Selection => {
 	const deduped = dedupeByContent(rules);
-	const sorted = sortByPriority(deduped.active);
-	const budgeted = foldBudget(sorted, budget);
-	return { active: budgeted.active, dropped: [...deduped.dropped, ...budgeted.dropped] };
+	const candidates = [...deduped.active].sort((a, b) => b.priority - a.priority || (a.index ?? 0) - (b.index ?? 0));
+	const budgeted = foldBudget(candidates, budget);
+	return { active: sortByPriority(budgeted.active), dropped: [...deduped.dropped, ...budgeted.dropped] };
 };

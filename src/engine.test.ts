@@ -350,7 +350,7 @@ describe("evaluate — selection and rendering", () => {
 		expect(trace.block?.content).toContain("## test rule");
 	});
 
-	it("drops content-duplicate later rules with cause duplicate", async () => {
+	it("drops the earlier equal-priority content duplicate with cause duplicate", async () => {
 		const trace = await evaluate(
 			[
 				ruleWith({ id: "first", globs: ["a.md"] }),
@@ -359,9 +359,9 @@ describe("evaluate — selection and rendering", () => {
 			contextWith({ touchedPaths: ["a.md", "b.md"] }),
 			{ scan: scannerReturning([]).scanner, budget: 100 },
 		);
-		expect(trace.selection.active.map((r) => r.id)).toEqual([ruleId("first")]);
+		expect(trace.selection.active.map((r) => r.id)).toEqual([ruleId("second")]);
 		expect(trace.selection.dropped).toEqual([
-			{ rule: ruleWith({ id: "second", globs: ["b.md"] }), cause: "duplicate" },
+			{ rule: ruleWith({ id: "first", globs: ["a.md"] }), cause: "duplicate" },
 		]);
 	});
 

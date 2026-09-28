@@ -8,7 +8,7 @@
  * its own. All cycles run against in-memory `SessionState` values; the
  * orchestrator must return fresh state and never mutate its input.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { initialState } from "../src/state.ts";
 import type { SessionState } from "../src/state.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
@@ -98,7 +98,7 @@ describe("runInjectionCycle", () => {
 		// and the block exists exactly because something is active.
 		expect(result.trace.results).toHaveLength(1);
 		expect(result.trace.results[0]).toMatchObject({ matched: true, ruleId: rule.id });
-		expect(result.trace.selection.active).toEqual([rule]);
+		expect(result.trace.selection.active).toEqual([{ ...rule, index: 0 }]);
 		expect(result.trace.block).toBe(result.block);
 		// The cycle drove discovery through the injected seam with the trust gate.
 		expect(recorded.discoverCalls).toEqual([{ cwd: normalizedPath("/work"), isProjectTrusted: true }]);
@@ -157,6 +157,30 @@ describe("runInjectionCycle", () => {
 		expect(result.nextState).toBe(initialState);
 	});
 
+	it("PI_RULES_MAX_TOKENS overrides the default budget", async () => {
+		const large = ruleWith({ id: "large", content: "x".repeat(8400) });
+		const small = ruleWith({ id: "small", content: "y".repeat(400) });
+		const { deps } = depsWith([large, small]);
+		vi.stubEnv("PI_RULES_MAX_TOKENS", "3000");
+		try {
+			const result = await runInjectionCycle(inputWith(initialState, deps));
+			expect(result.trace.selection.active.map((rule) => rule.id)).toEqual(["large", "small"]);
+		} finally { vi.unstubAllEnvs(); }
+	});
+
+	it("invalid and non-positive PI_RULES_MAX_TOKENS values fall back to the default", async () => {
+		const large = ruleWith({ id: "large", content: "x".repeat(8400) });
+		const small = ruleWith({ id: "small", content: "y".repeat(400) });
+		const { deps } = depsWith([large, small]);
+		for (const value of ["invalid", "0", "-2"]) {
+			vi.stubEnv("PI_RULES_MAX_TOKENS", value);
+			try {
+				const result = await runInjectionCycle(inputWith(initialState, deps));
+				expect(result.trace.selection.active.map((rule) => rule.id)).toEqual(["large"]);
+			} finally { vi.unstubAllEnvs(); }
+		}
+	});
+
 	it("records budget drops in the trace while patching what fits", async () => {
 		const big = ruleWith({ id: "big", content: "x".repeat(40) }); // ~10 tokens
 		const other = ruleWith({ id: "other", content: "y".repeat(40) }); // ~10 tokens
@@ -164,8 +188,8 @@ describe("runInjectionCycle", () => {
 		const input = { ...inputWith(initialState, deps) };
 		const result = await runInjectionCycle({ ...input, deps: { ...deps, budget: 15 } });
 
-		expect(result.trace.selection.active).toEqual([big]);
-		expect(result.trace.selection.dropped).toEqual([{ rule: other, cause: "budget" }]);
+		expect(result.trace.selection.active).toEqual([{ ...big, index: 0 }]);
+		expect(result.trace.selection.dropped).toEqual([{ rule: { ...other, index: 1 }, cause: "budget" }]);
 		expect(result.decision).toEqual({ action: "patch" });
 		expect(result.block).toBeDefined();
 	});

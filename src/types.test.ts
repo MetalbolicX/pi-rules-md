@@ -61,7 +61,8 @@ describe("Rule", () => {
 		content: "# TS rules\n\nUse tabs.",
 	};
 
-	it("accepts a fully populated rule literal", () => {
+	it("carries an optional discovery index for shell-materialized ordering", () => {
+		expectTypeOf<Rule["index"]>().toEqualTypeOf<number | undefined>();
 		expectTypeOf(rule).toEqualTypeOf<Rule>();
 		expect(rule.version).toBe(1);
 	});

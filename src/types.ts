@@ -53,6 +53,8 @@ export type Enforcement = "enforce" | "recommend" | "inform";
 export interface Rule {
 	/** Stable rule identifier. */
 	readonly id: RuleId;
+	/** Discovery order (project before global); materialized by the shell pipeline. */
+	readonly index?: number;
 	/** Source file this rule was loaded from (normalized). */
 	readonly path: NormalizedPath;
 	/** Whether the rule came from the global or the project rules directory. */

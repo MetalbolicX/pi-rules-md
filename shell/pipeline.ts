@@ -117,7 +117,12 @@ export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineR
 	};
 
 	const discovered = await input.deps.discover({ cwd: ctx.cwd, isProjectTrusted: input.trusted });
-	const trace = await evaluate(discovered.rules, ctx, { scan: input.deps.scan, budget: input.deps.budget });
+	const rules = [...discovered.rules]
+		.sort((a, b) => (a.source === b.source ? 0 : a.source === "project" ? -1 : 1))
+		.map((rule, index) => ({ ...rule, index }));
+	const configuredBudget = Number.parseInt(process.env.PI_RULES_MAX_TOKENS ?? "", 10);
+	const budget = Number.isNaN(configuredBudget) || configuredBudget <= 0 ? input.deps.budget : configuredBudget;
+	const trace = await evaluate(rules, ctx, { scan: input.deps.scan, budget });
 
 	const block = trace.block;
 	const decision = injectionDecision(block, input.state.lastInjectedHash);

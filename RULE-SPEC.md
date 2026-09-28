@@ -101,13 +101,23 @@ positive pattern, then excluded if it matches any negation.
 
 ## 6. Selection, budget, rendering
 
+- Every discovered rule receives a monotonic `index` in discovery order:
+  project rules first, then global rules, retaining each source's order.
 - Content-level dedupe: rules with byte-identical full content are
-  deduplicated, keeping the FIRST occurrence in discovery order
-  (project-first).
-- Sorted by `priority` DESC (stable sort keeps discovery order on ties).
-- Token budget (default 2000, estimated `ceil(chars/4)`): selected
-  top-down; the fold stops at the first rule that does not fit — every
-  remaining rule is dropped with cause `budget` (no best-effort fill).
+  deduplicated; higher `priority` wins, and equal priorities keep the later
+  discovery `index`. Losers are dropped with cause `duplicate`. This
+  supersedes v1's first-occurrence-wins behavior.
+- Budget candidates are considered by `priority` DESC, then `index` ASC.
+  Greedy fill admits each candidate that fits and skips a non-fitting rule
+  while continuing to later candidates. If candidates exist, the first is
+  always kept even when it exceeds the budget; this supersedes v1's stop-at-
+  first-non-fit behavior.
+- After budget selection, presentation order is unconditional rules first
+  (`alwaysApply: true` or no declared activation conditions), then
+  `priority` DESC, then `index` ASC.
+- Token budget defaults to 2000 estimated tokens (`ceil(chars/4)`). The
+  shell's `PI_RULES_MAX_TOKENS` environment override is parsed as an integer;
+  absent, invalid, or non-positive values use the default.
 - Rendered as one `pi-rules-md` system-prompt section: `# Rules` header,
   framing line, one entry per selected rule (`## <description>`), optional
   `> Triggered by: <reasons>` when reasons exist, and `---` separators.
