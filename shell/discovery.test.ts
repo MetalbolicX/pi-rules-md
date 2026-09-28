@@ -13,6 +13,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discover, nodeDiscoveryDeps, tinyglobbyScanner } from "./discovery.ts";
@@ -483,6 +484,73 @@ describe("production adapters — real filesystem", () => {
 			expect(path.includes("\\")).toBe(false);
 			expect(path.startsWith("/")).toBe(false);
 			expect(path.includes("node_modules")).toBe(false);
+		}
+	});
+
+	it("skips a symlinked rule file outside the rules dir", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-link-"));
+		try {
+			const rules = join(root, "rules");
+			await mkdir(rules);
+			const outside = join(root, "outside.md");
+			await writeFile(outside, ruleText("Outside"));
+			symlinkSync(outside, join(rules, "linked.md"));
+			const result = await discover(nodeDiscoveryDeps(), new Map(), {
+				globalDir: rules, projectDir: rules, isProjectTrusted: false,
+			});
+			expect(result.rules).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("skips rules inside a symlinked directory", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-linkdir-"));
+		try {
+			const rules = join(root, "rules");
+			const actual = join(root, "actual");
+			await mkdir(rules);
+			await mkdir(actual);
+			await writeFile(join(actual, "linked.md"), ruleText("Linked"));
+			symlinkSync(actual, join(rules, "alias"), "dir");
+			const result = await discover(nodeDiscoveryDeps(), new Map(), {
+				globalDir: rules, projectDir: rules, isProjectTrusted: false,
+			});
+			expect(result.rules).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("stops recursion at depth 10", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-depth-"));
+		try {
+			const rules = join(root, "rules");
+			const boundary = Array.from({ length: 9 }, (_, i) => `d${i}`).join("/");
+			const beyond = `${boundary}/d9`;
+			await mkdir(join(rules, boundary), { recursive: true });
+			await mkdir(join(rules, beyond), { recursive: true });
+			await writeFile(join(rules, boundary, "boundary.md"), ruleText("Boundary"));
+			await writeFile(join(rules, beyond, "beyond.md"), ruleText("Beyond"));
+			const result = await discover(nodeDiscoveryDeps(), new Map(), {
+				globalDir: rules, projectDir: rules, isProjectTrusted: false,
+			});
+			expect(result.rules.map((rule) => rule.id)).toEqual(["boundary"]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("ignores hidden entries", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-hidden-"));
+		try {
+			await writeFile(join(root, ".hidden.md"), ruleText("Hidden"));
+			const result = await discover(nodeDiscoveryDeps(), new Map(), {
+				globalDir: root, projectDir: root, isProjectTrusted: false,
+			});
+			expect(result.rules).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
 		}
 	});
 

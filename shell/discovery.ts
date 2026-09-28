@@ -48,7 +48,7 @@
  * - Parse failures (`parseRule` Result err) are collected into `errors`,
  *   never thrown.
  */
-import { readFile, stat } from "node:fs/promises";
+import { lstat, readFile, stat } from "node:fs/promises";
 import { glob } from "tinyglobby";
 import { parseRule } from "../src/frontmatter.ts";
 import type { GlobScanner } from "../src/match.ts";
@@ -90,6 +90,7 @@ export interface DiscoveryResult {
 }
 
 const RULE_SUFFIX = ".md";
+const MAX_RULES_SCAN_DEPTH = 10;
 
 /** True for files this pipeline treats as rule files. */
 const isRuleFile = (path: string): boolean => path.endsWith(RULE_SUFFIX);
@@ -282,7 +283,31 @@ export const discover = async (
 export const nodeDiscoveryDeps = (): DiscoveryDeps => ({
 	listRuleFiles: async (dir) => {
 		try {
-			return await glob(["**/*.md"], { cwd: dir, dot: false });
+			const listed = await glob(["**/*.md"], { cwd: dir, dot: false });
+			const safe: string[] = [];
+			for (const name of listed) {
+				const segments = name.split("/");
+				if (segments.length > MAX_RULES_SCAN_DEPTH) continue;
+				let current = dir;
+				let linked = false;
+				for (const segment of segments) {
+					current = `${current}/${segment}`;
+					try {
+						if ((await lstat(current)).isSymbolicLink()) {
+							linked = true;
+							break;
+						}
+					} catch (cause) {
+						if (isEnoent(cause)) {
+							linked = true;
+							break;
+						}
+						throw cause;
+					}
+				}
+				if (!linked) safe.push(name);
+			}
+			return safe;
 		} catch (cause) {
 			if (isEnoent(cause)) {
 				return [];
