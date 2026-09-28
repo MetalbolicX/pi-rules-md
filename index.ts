@@ -57,7 +57,7 @@ export interface RulesCommandOptions {
 
 /** Local structural subset of pi's ExtensionAPI — narrow enough for typed fakes. */
 export interface PiExtensionApiLike {
-	on(event: "tool_result", handler: (event: PiEventShape, ctx: ExtensionContextLike) => unknown): unknown;
+	on(event: "tool_execution_start", handler: (event: PiEventShape, ctx: ExtensionContextLike) => unknown): unknown;
 	on(
 		event: "session_compact" | "session_before_switch" | "session_before_fork",
 		handler: (event: PiEventShape, ctx: ExtensionContextLike) => unknown,
@@ -104,7 +104,7 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 				state = transition(state, stateEvent);
 			}
 		};
-		api.on("tool_result", foldSignal);
+		api.on("tool_execution_start", foldSignal);
 		api.on("session_compact", foldSignal);
 		api.on("session_before_switch", foldSignal);
 		api.on("session_before_fork", foldSignal);

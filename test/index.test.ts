@@ -73,8 +73,13 @@ const commandCtx = (): { readonly ctx: RulesCommandContext; readonly notificatio
 	return { ctx, notifications };
 };
 
-/** Signal event fixture: a tool_result carrying one path-like arg. */
-const toolResult = (path: string): PiEventShape => ({ type: "tool_result", toolName: "read", input: { file_path: path } });
+/** Pre-execution event fixture carrying a built-in tool's path arg. */
+const toolExecutionStart = (toolName: string, path: string): PiEventShape => ({
+	type: "tool_execution_start",
+	toolCallId: "call-1",
+	toolName,
+	args: { path },
+} as PiEventShape);
 
 /** Faked ExtensionDeps: discover yields the given rules/errors, scan nothing. */
 const depsWith = (opts: { readonly rules: readonly Rule[]; readonly errors?: readonly RuleError[]; readonly budget?: number }): {
@@ -173,7 +178,7 @@ describe("createRulesExtension registration", () => {
 			"session_before_fork",
 			"session_before_switch",
 			"session_compact",
-			"tool_result",
+			"tool_execution_start",
 		]);
 		for (const handlers of api.signals.values()) {
 			expect(handlers).toHaveLength(1);
@@ -207,14 +212,14 @@ describe("createRulesExtension registration", () => {
 });
 
 describe("createRulesExtension event folding", () => {
-	it("folds tool_result paths into state, visible as a patched section on the next cycle", async () => {
+	it("folds pre-execution tool paths into state, visible as a patched section on the next cycle", async () => {
 		const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false });
 		const { deps, discoverCalls } = depsWith({ rules: [rule] });
 		const api = fakeApi();
 		createRulesExtension(deps)(api.api);
 		const ctx = handlerCtx("/work", true, "test-model");
 
-		await emitSignal(api, toolResult("/work/src/a.ts"), ctx);
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
 		const sections: Record<string, string> = {};
 		await emitStart(api, ctx, sections);
 
@@ -252,7 +257,7 @@ describe("createRulesExtension event folding", () => {
 			createRulesExtension(deps)(api.api);
 			const ctx = handlerCtx("/work");
 
-			await emitSignal(api, toolResult("/work/src/a.ts"), ctx);
+			await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
 			const sections: Record<string, string> = {};
 			await emitStart(api, ctx, sections);
 			expect(sections["pi-rules-md"]).toContain("test rule touched-rule");

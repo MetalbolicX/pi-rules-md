@@ -389,27 +389,32 @@ const randomRawPath = (rng: Seeded, cwd: string): string =>
 	]);
 
 /** Tool-args object variants, including absent and non-string path fields. */
-const randomToolInput = (rng: Seeded, cwd: string): Record<string, unknown> | undefined =>
-	rng.oneof<Record<string, unknown> | undefined>([
-		(): Record<string, unknown> => ({ file_path: randomRawPath(rng, cwd) }),
+const randomToolArgs = (rng: Seeded, cwd: string): unknown =>
+	rng.oneof<unknown>([
 		(): Record<string, unknown> => ({ path: randomRawPath(rng, cwd) }),
-		(): Record<string, unknown> => ({ filePath: randomRawPath(rng, cwd) }),
 		(): Record<string, unknown> => ({}),
-		(): Record<string, unknown> => ({ file_path: 42 }),
-		(): Record<string, unknown> => ({ file_path: randomRawPath(rng, cwd), path: "ignored.md" }),
-		(): Record<string, unknown> | undefined => undefined,
+		(): Record<string, unknown> => ({ path: 42 }),
+		(): Record<string, unknown> => ({ path: randomRawPath(rng, cwd), extra: "ignored" }),
+		(): undefined => undefined,
+		(): null => null,
+		(): string => "malformed args",
 	]);
 
 /**
  * One random pi-event-like value across the collector's input domain:
- * known kinds, a foreign kind, and non-object garbage (null/undefined/42).
+ * lifecycle kinds, tool_execution_start with recognized/unknown tools and
+ * well-formed/malformed args, a foreign kind, and non-object garbage.
  */
 export const randomPiEvent = (rng: Seeded, cwd: string): PiEventShape =>
 	rng.oneof<PiEventShape>([
 		(): PiEventShape => ({ type: "session_compact" }),
 		(): PiEventShape => ({ type: "session_before_switch" }),
 		(): PiEventShape => ({ type: "session_before_fork" }),
-		(): PiEventShape => ({ type: "tool_result", toolName: rng.pick(TOOL_POOL), input: randomToolInput(rng, cwd) }),
+		(): PiEventShape => {
+			const toolName = rng.pick(["read", "edit", "write", "grep", "find", "bash", "custom"]);
+			const args = toolName === "bash" ? { command: "echo property-test", timeout: 1 } : randomToolArgs(rng, cwd);
+			return { type: "tool_execution_start", toolCallId: `call-${String(rng.int(0, 999))}`, toolName, args };
+		},
 		(): PiEventShape => ({ type: "model_select" }) as unknown as PiEventShape,
 		(): PiEventShape => null as unknown as PiEventShape,
 		(): PiEventShape => undefined as unknown as PiEventShape,

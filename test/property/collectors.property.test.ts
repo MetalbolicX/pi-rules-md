@@ -4,11 +4,9 @@
  * Invariants over generated events, 200 cases, fixed seeds:
  * - piEventToStateEvents is pure: the same event maps to the same state
  *   events on every call;
- * - the mapping matches the pinned contract exactly: known lifecycle kinds,
- *   first-string path extraction (file_path → path → filePath),
- *   cwd-relativization (strip a `cwd + "/"` prefix, normalize backslashes,
- *   keep relative and outside-cwd paths), and totality — null, undefined,
- *   non-objects, and foreign kinds all map to [].
+ * - the mapping matches the pre-execution contract: known lifecycle kinds,
+ *   recognized read/edit/write/grep/find `args.path` capture, bash and unknown
+ *   tool no-ops, cwd-relativization, and totality for malformed inputs.
  *
  * Deterministic via the seeded harness; no I/O, no clocks.
  */
@@ -38,8 +36,14 @@ const expectedStateEvents = (event: PiEventShape, cwd: string): readonly StateEv
 		case "session_before_switch":
 		case "session_before_fork":
 			return [{ type: "session_reset" }];
-		case "tool_result": {
-			const raw = event.input?.file_path ?? event.input?.path ?? event.input?.filePath;
+		case "tool_execution_start": {
+			if (!["read", "edit", "write", "grep", "find"].includes(event.toolName)) {
+				return [];
+			}
+			if (event.args === null || typeof event.args !== "object" || Array.isArray(event.args)) {
+				return [];
+			}
+			const raw = (event.args as Record<string, unknown>).path;
 			if (typeof raw !== "string") {
 				return [];
 			}
@@ -54,6 +58,35 @@ const expectedStateEvents = (event: PiEventShape, cwd: string): readonly StateEv
 };
 
 describe("piEventToStateEvents — purity and contract (property)", () => {
+	it(`captures only built-in path args and ignores bash/malformed args (${CASES} cases)`, () => {
+		const rng = createSeeded(0x434f4c33);
+		const pathTools = ["read", "edit", "write", "grep", "find"] as const;
+		for (let caseIndex = 0; caseIndex < CASES; caseIndex += 1) {
+			const cwd = rng.pick(CWD_POOL);
+			const file = `p${rng.int(0, 999)}.ts`;
+			const path = `${cwd}/src/${file}`;
+			for (const toolName of pathTools) {
+				const result = piEventToStateEvents({
+					type: "tool_execution_start",
+					toolCallId: `call-${caseIndex}`,
+					toolName,
+					args: { path },
+				}, { cwd });
+				expect(result, `case ${caseIndex}, ${toolName}`).toEqual([
+					{ type: "paths_touched", paths: [normalizedPath(`src/${file}`)] },
+				]);
+			}
+			expect(piEventToStateEvents({
+				type: "tool_execution_start", toolCallId: `bash-${caseIndex}`, toolName: "bash",
+				args: { command: `cd ${cwd} && echo ignored`, timeout: 1 },
+			}, { cwd })).toEqual([]);
+			for (const args of [undefined, null, 42, "bad", [], { path: 42 }]) {
+				expect(piEventToStateEvents({
+					type: "tool_execution_start", toolCallId: `bad-${caseIndex}`, toolName: "read", args,
+				}, { cwd })).toEqual([]);
+			}
+		}
+	});
 	it(`maps every generated event identically on repeat calls (${CASES} cases)`, () => {
 		const rng = createSeeded(0x434f4c31);
 		for (let caseIndex = 0; caseIndex < CASES; caseIndex += 1) {
@@ -67,7 +100,7 @@ describe("piEventToStateEvents — purity and contract (property)", () => {
 		}
 	});
 
-	it(`relativizes generated paths against cwd stably (${CASES} cases)`, () => {
+	it(`captures pre-execution path args and relativizes them against cwd stably (${CASES} cases)`, () => {
 		const rng = createSeeded(0x434f4c32);
 		for (let caseIndex = 0; caseIndex < CASES; caseIndex += 1) {
 			const cwd = rng.pick(CWD_POOL);
@@ -76,22 +109,16 @@ describe("piEventToStateEvents — purity and contract (property)", () => {
 			const outside = "/etc/hosts";
 			const backslashed = "nested\\f0.ts";
 
-			const under = piEventToStateEvents(
-				{ type: "tool_result", toolName: "edit", input: { file_path: underCwd } },
-				{ cwd },
-			);
-			const keptRelative = piEventToStateEvents(
-				{ type: "tool_result", toolName: "edit", input: { path: relative } },
-				{ cwd },
-			);
-			const keptOutside = piEventToStateEvents(
-				{ type: "tool_result", toolName: "edit", input: { filePath: outside } },
-				{ cwd },
-			);
-			const normalizedBackslashes = piEventToStateEvents(
-				{ type: "tool_result", toolName: "edit", input: { file_path: backslashed } },
-				{ cwd },
-			);
+			const event = (toolName: string, path: string): PiEventShape => ({
+				type: "tool_execution_start",
+				toolCallId: `case-${caseIndex}`,
+				toolName,
+				args: { path },
+			});
+			const under = piEventToStateEvents(event("read", underCwd), { cwd });
+			const keptRelative = piEventToStateEvents(event("grep", relative), { cwd });
+			const keptOutside = piEventToStateEvents(event("write", outside), { cwd });
+			const normalizedBackslashes = piEventToStateEvents(event("find", backslashed), { cwd });
 			const context = `case ${caseIndex}`;
 			expect(under, `${context}: cwd prefix stripped`).toEqual([
 				{ type: "paths_touched", paths: [`src/f${caseIndex}.ts`] },

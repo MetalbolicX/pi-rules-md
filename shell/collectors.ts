@@ -11,22 +11,19 @@
  * - `SessionCompactEvent`      → `session_compact`
  * - `SessionBeforeSwitchEvent` → `session_before_switch`
  * - `SessionBeforeForkEvent`   → `session_before_fork`
- * - `ToolResultEvent`          → `tool_result` (carries `toolName` + `input`
- *   args; `tool_execution_end` carries only a `result` payload, not args)
+ * - `ToolExecutionStartEvent` → `tool_execution_start` (carries
+ *   `toolCallId`, `toolName`, and pre-execution `args`) — exact SDK declaration
+ *   is in `dist/core/extensions/types.d.ts:673-678`.
  *
  * NO runtime import of pi or any other package — the union is structural so
  * the collector can be tested against typed fakes and survives pi upgrades
  * that only add fields.
  *
- * Mapping (v1 contract):
+ * Mapping:
  * - `session_compact`      → `[session_compact]` (hash hysteresis reset)
  * - `session_before_switch` and `session_before_fork` → `[session_reset]`
- * - `tool_result` whose args carry a path-like string — first of
- *   `input.file_path ?? input.path ?? input.filePath` that is present, kept
- *   only when it is a string — → one `paths_touched` with that single path
- *   (dedupe/accumulation is the reducer's job). No tool-name allowlist:
- *   generic structural extraction is the disclosed v1 simplification. No
- *   path extraction from bash stdout (v1).
+ * - pre-execution read/edit/write/grep/find events use their built-in `args.path`
+ *   to produce one `paths_touched`; bash and unknown tools produce no path event.
  *
  * Paths are normalized (backslashes → slashes via `normalizedPath`) and
  * relativized against `cwd`: an absolute path starting with `cwd + "/"`
@@ -43,20 +40,19 @@ import type { NormalizedPath } from "../src/types.ts";
 
 /**
  * Minimal structural mirror of the pi extension events this collector
- * consumes. Field shapes stay loose on purpose: `input` is what real pi
- * types as `Record<string, unknown>`, widened to allow `undefined` so
- * defensive handling of absent args is part of the contract.
+ * consumes. `args: any` matches Pi's installed ToolExecutionStartEvent
+ * declaration; the mapper treats it as untrusted and guards every access.
  */
 export type PiEventShape =
 	| { readonly type: "session_compact" }
 	| { readonly type: "session_before_switch" }
 	| { readonly type: "session_before_fork" }
 	| {
-			readonly type: "tool_result";
-			/** Carried for event identity; the v1 mapper applies no tool-name allowlist. */
+			readonly type: "tool_execution_start";
+			readonly toolCallId: string;
 			readonly toolName: string;
-			/** Tool arguments, plain object or absent. */
-			readonly input: Record<string, unknown> | undefined;
+			/** Pi SDK types.d.ts:673-678 declares args as any. */
+			readonly args: any;
 	  };
 
 /** Relativizes a raw path against `cwd`: strip a `cwd + "/"` prefix, else keep. */
@@ -66,9 +62,14 @@ const toStatePath = (raw: string, cwd: string): NormalizedPath => {
 	return path.startsWith(prefix) ? normalizedPath(path.slice(prefix.length)) : path;
 };
 
-/** First path-like string in a tool_result's args, or none. */
-const extractPathArg = (input: Record<string, unknown> | undefined): string | undefined => {
-	const raw = input?.file_path ?? input?.path ?? input?.filePath;
+const PATH_ARG_TOOLS = new Set(["read", "edit", "write", "grep", "find"]);
+
+/** The installed built-ins all use `path` for their file/search scope. */
+const extractPathArg = (toolName: string, args: unknown): string | undefined => {
+	if (!PATH_ARG_TOOLS.has(toolName) || args === null || typeof args !== "object" || Array.isArray(args)) {
+		return undefined;
+	}
+	const raw = (args as Record<string, unknown>).path;
 	return typeof raw === "string" ? raw : undefined;
 };
 
@@ -85,18 +86,23 @@ export const piEventToStateEvents = (
 	if (event === null || typeof event !== "object") {
 		return [];
 	}
-	switch (event.type) {
-		case "session_compact":
-			return [{ type: "session_compact" }];
-		case "session_before_switch":
-		case "session_before_fork":
-			return [{ type: "session_reset" }];
-		case "tool_result": {
-			const raw = extractPathArg(event.input);
-			return raw === undefined ? [] : [{ type: "paths_touched", paths: [toStatePath(raw, opts.cwd)] }];
+	try {
+		switch (event.type) {
+			case "session_compact":
+				return [{ type: "session_compact" }];
+			case "session_before_switch":
+			case "session_before_fork":
+				return [{ type: "session_reset" }];
+			case "tool_execution_start": {
+				const raw = extractPathArg(event.toolName, event.args);
+				return raw === undefined ? [] : [{ type: "paths_touched", paths: [toStatePath(raw, opts.cwd)] }];
+			}
+			default:
+				// Foreign runtime shape: no events, never an error.
+				return [];
 		}
-		default:
-			// Foreign runtime shape: no events, never an error.
-			return [];
+	} catch {
+		// Malformed event objects and args are ignored; extension errors are fatal in Pi.
+		return [];
 	}
 };

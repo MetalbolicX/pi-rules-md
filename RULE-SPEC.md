@@ -89,9 +89,9 @@ positive pattern, then excluded if it matches any negation.
 
 ## 5. Activation semantics
 
-- `touched` — active when any agent tool touched a path matching the
-  globs this session (observed from `tool_result` events; first
-  occurrence wins, order preserved).
+- `touched` — active when an agent tool's pre-execution arguments name a path
+  matching the globs this session. Paths are captured from `tool_execution_start`
+  events; first occurrence wins, order preserved.
 - `exists` — active when any path matching the globs exists on disk
   (checked via the scan seam each evaluation).
 - `both` — touched **OR** exists (the default).
@@ -101,6 +101,25 @@ positive pattern, then excluded if it matches any negation.
 - Before evaluation, the current turn prompt is checked for whole-word, case-insensitive language names: python/pytest → `*.py`, rust → `*.rs`, typescript → `*.ts`, javascript → `*.js`, golang → `*.go`, kotlin → `*.kt`, java → `*.java`, csharp → `*.cs`, ruby → `*.rb`. There is intentionally no bare `go` language trigger.
 - Matching rule `keywords` donate that rule's own positive globs to the intent set. Intent globs satisfy a rule's `globs` condition when covered by its patterns, independently of touched/existing path matches; intent alone does not activate rules lacking globs or bypass other conditions.
 - **Intent globs never enter the context path pool** (`touchedPaths` or `existingPaths`) and do not expand the filesystem scan. They are a separate input to the globs-condition check.
+
+### Pre-execution path capture
+
+`tool_execution_start` is observed before tool execution. The event's `args` are
+untrusted; missing, malformed, non-object, or non-string path arguments and
+unknown tools are ignored. Recognized paths are normalized and deduplicated by
+the session-state reducer.
+
+| Pi built-in | Captured argument | Behavior |
+| --- | --- | --- |
+| `read`, `edit`, `write` | `path` | Captured as a file path. |
+| `grep` | optional `path` | Captured as the search scope when present. |
+| `find` | optional `path` | Captured as the glob-search scope when present. |
+| `bash` | none | No capture: Pi's schema has only `command` and `timeout`. |
+
+These keys are verified against the installed Pi schemas in
+`dist/core/tools/{read,edit,write,grep,find,bash}.js`. Unlike OpenCode, Pi's
+bash tool has no `workdir` argument. This is a deliberate runtime divergence:
+we do not parse paths from shell command strings.
 
 ## 6. Selection, budget, rendering
 
