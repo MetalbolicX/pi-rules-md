@@ -16,12 +16,14 @@ import type { PiEventShape } from "./shell/collectors.ts";
 import { discover as discoverRules, nodeDiscoveryDeps, tinyglobbyScanner } from "./shell/discovery.ts";
 import type { DiscoveryCacheEntry, DiscoveryDeps } from "./shell/discovery.ts";
 import { applyInjection, removeInjection } from "./shell/injection.ts";
+import { createReadRuleTool } from "./shell/read-rule.ts";
+import type { ReadRuleToolDefinition } from "./shell/read-rule.ts";
 import { DEFAULT_BUDGET_TOKENS, renderTraceReport, runInjectionCycle } from "./shell/pipeline.ts";
 import type { PipelineDeps } from "./shell/pipeline.ts";
 import { initialState, transition } from "./src/state.ts";
 import type { SessionState } from "./src/state.ts";
 import { normalizedPath } from "./src/types.ts";
-import type { EvaluationTrace, NormalizedPath, RuleError } from "./src/types.ts";
+import type { EvaluationTrace, NormalizedPath, Rule, RuleError } from "./src/types.ts";
 
 /** Handler context fields the wiring consumes (mirror of pi ExtensionContext). */
 export interface ExtensionContextLike {
@@ -61,6 +63,8 @@ export interface PiExtensionApiLike {
 	): unknown;
 	on(event: "before_agent_start", handler: (event: BeforeAgentStartLike, ctx: ExtensionContextLike) => unknown): unknown;
 	registerCommand(name: string, options: RulesCommandOptions): void;
+	/** Structural mirror of the installed Pi registerTool definition. */
+	registerTool(tool: ReadRuleToolDefinition): void;
 }
 
 /** Injected effects of the extension: pipeline deps (testability seam) plus the clock. */
@@ -78,17 +82,21 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 	let state: SessionState = initialState;
 	let lastTrace: EvaluationTrace | undefined;
 	let lastErrors: readonly RuleError[] = [];
+	let lastDiscoveredRules: readonly Rule[] = [];
 	// Discovery seam wrapper: keep the parse errors of the last cycle for /rules.
 	const pipeline: PipelineDeps = {
 		...deps.pipeline,
 		discover: async (opts) => {
 			const outcome = await deps.pipeline.discover(opts);
 			lastErrors = outcome.errors;
+			lastDiscoveredRules = outcome.rules;
 			return outcome;
 		},
 	};
 
 	return (api: PiExtensionApiLike): void => {
+		api.registerTool(createReadRuleTool(() => lastDiscoveredRules));
+
 		// Signal events fold into state through the collector + reducer.
 		const foldSignal = (event: PiEventShape, ctx: ExtensionContextLike): void => {
 			for (const stateEvent of piEventToStateEvents(event, { cwd: ctx.cwd })) {

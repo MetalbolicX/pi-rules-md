@@ -14,6 +14,9 @@ importers:
       tinyglobby:
         specifier: ^0.2.17
         version: 0.2.17
+      typebox:
+        specifier: 1.3.27
+        version: 1.3.27
       yaml:
         specifier: ^2.9.1
         version: 2.9.1

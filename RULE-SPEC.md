@@ -126,6 +126,13 @@ positive pattern, then excluded if it matches any negation.
   rendered when no on-demand rule
   matched. Each rule's `relativePath` is a POSIX path relative to its source's
   rules root, never an absolute path.
+- `read_rule` looks up a discovered rule by exact `relativePath` and returns
+  its parsed `content` body directly; it performs no filesystem read. Absolute
+  paths (POSIX or Windows) and any name containing a `..` segment, as well as
+  unknown names, return `Unknown rule: <name>`. The FROZEN tool description is:
+  `Fetch the full content of a reference rule by its rules-relative path. Use
+  when a "Reference rules available on demand" index entry is relevant to the
+  current task.`
 - The evaluation trace partitions matched rules into pinned `active` and
   `onDemand`, reports all matched rule file paths (including on-demand paths),
   and estimates tokens over the complete rendered block including its index.

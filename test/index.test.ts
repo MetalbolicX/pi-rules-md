@@ -20,6 +20,7 @@ import type {
 	RulesCommandOptions,
 } from "../index.ts";
 import type { PiEventShape } from "../shell/collectors.ts";
+import type { ReadRuleToolDefinition } from "../shell/read-rule.ts";
 import { DEFAULT_BUDGET_TOKENS } from "../shell/pipeline.ts";
 import type { DiscoverOptions } from "../shell/pipeline.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
@@ -35,7 +36,10 @@ const ruleWith = (fields: {
 	readonly match?: "touched" | "exists" | "both";
 	readonly alwaysApply?: boolean;
 	readonly content?: string;
+	readonly load?: "pinned" | "on-demand";
 }): Rule => ({
+	load: fields.load ?? "pinned",
+	relativePath: normalizedPath(`${fields.id ?? "always-on"}.md`),
 	id: ruleId(fields.id ?? "always-on"),
 	path: normalizedPath(`/work/.pi/rules/${fields.id ?? "always-on"}.md`),
 	source: "project",
@@ -98,10 +102,12 @@ const fakeApi = (): {
 	readonly signals: Map<string, Array<(event: PiEventShape, ctx: ExtensionContextLike) => unknown>>;
 	readonly starts: Array<(event: BeforeAgentStartLike, ctx: ExtensionContextLike) => unknown>;
 	readonly commands: Map<string, RulesCommandOptions>;
+	readonly tools: Map<string, ReadRuleToolDefinition>;
 } => {
 	const signals = new Map<string, Array<(event: PiEventShape, ctx: ExtensionContextLike) => unknown>>();
 	const starts: Array<(event: BeforeAgentStartLike, ctx: ExtensionContextLike) => unknown> = [];
 	const commands = new Map<string, RulesCommandOptions>();
+	const tools = new Map<string, ReadRuleToolDefinition>();
 	const api = {
 		on(event: string, handler: (event: PiEventShape | BeforeAgentStartLike, ctx: ExtensionContextLike) => unknown): unknown {
 			if (event === "before_agent_start") {
@@ -116,8 +122,11 @@ const fakeApi = (): {
 		registerCommand(name: string, options: RulesCommandOptions): void {
 			commands.set(name, options);
 		},
+		registerTool(tool: ReadRuleToolDefinition): void {
+			tools.set(tool.name, tool);
+		},
 	};
-	return { api: api as PiExtensionApiLike, signals, starts, commands };
+	return { api: api as PiExtensionApiLike, signals, starts, commands, tools };
 };
 
 /** Invokes every captured handler for one pi signal event. */
@@ -171,6 +180,22 @@ describe("createRulesExtension registration", () => {
 		expect(api.starts).toHaveLength(1);
 		expect(api.commands.get("rules")?.description).toBeTruthy();
 		expect(api.commands.get("rules")?.handler).toBeDefined();
+	});
+
+	it("registers read_rule with a prompt snippet and retrieves the discovered body", async () => {
+		const reference = ruleWith({ id: "python/style", load: "on-demand", content: "Use explicit names." });
+		const { deps } = depsWith({ rules: [reference] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const tool = api.tools.get("read_rule");
+		expect(tool?.description).toBe(
+			'Fetch the full content of a reference rule by its rules-relative path. Use when a "Reference rules available on demand" index entry is relevant to the current task.',
+		);
+		expect(tool?.promptSnippet).toBeTruthy();
+
+		await emitStart(api, handlerCtx("/work"));
+		const result = await tool?.execute("tool-call", { name: "python/style.md" }, undefined, undefined, {} as never);
+		expect(result?.content).toEqual([{ type: "text", text: "Use explicit names." }]);
 	});
 
 	it("never throws during registration for the fake api", () => {
