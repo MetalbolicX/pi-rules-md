@@ -36,6 +36,7 @@ import type { SessionState } from "../src/state.ts";
 import { injectionDecision } from "./injection.ts";
 import type { InjectionDecision } from "./injection.ts";
 import { normalizedPath } from "../src/types.ts";
+import { globalRulesDir, projectRulesDir } from "./rules-paths.ts";
 import type { EvaluationContext, EvaluationTrace, InjectionBlock, MatchReason, Rule, RuleError } from "../src/types.ts";
 
 /** Default selection budget: 2000 estimated tokens (~8000 characters). */
@@ -123,15 +124,12 @@ export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineR
 	const rules = [...discovered.rules]
 		.sort((a, b) => (a.source === b.source ? 0 : a.source === "project" ? -1 : 1))
 		.map((rule, index) => {
-			const cwd = ctx.cwd.endsWith("/") && ctx.cwd.length > 1 ? ctx.cwd.slice(0, -1) : ctx.cwd;
-			const rulesRoot = rule.source === "project" ? `${cwd}/.pi/rules` : `${homedir()}/.pi/agent/rules`;
+			const rulesRoot = rule.source === "project" ? projectRulesDir(ctx.cwd) : globalRulesDir(homedir());
 			const prefix = `${rulesRoot}/`;
 			const relativePath = rule.relativePath ?? (rule.path.startsWith(prefix) ? normalizedPath(rule.path.slice(prefix.length)) : undefined);
 			return { ...rule, index, ...(relativePath === undefined ? {} : { relativePath }) };
 		});
-	const configuredBudget = Number.parseInt(process.env.PI_RULES_MAX_TOKENS ?? "", 10);
-	const budget = Number.isNaN(configuredBudget) || configuredBudget <= 0 ? input.deps.budget : configuredBudget;
-	const trace = await evaluate(rules, ctx, { scan: input.deps.scan, budget, prompt: input.prompt });
+	const trace = await evaluate(rules, ctx, { scan: input.deps.scan, budget: input.deps.budget, prompt: input.prompt });
 
 	const block = trace.block;
 	const decision = injectionDecision(block, input.state.lastInjectedHash);

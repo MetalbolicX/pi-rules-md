@@ -9,7 +9,6 @@
  * fakes drive `createRulesExtension` and add-only upgrades stay assignable.
  */
 import { homedir } from "node:os";
-import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { piEventToStateEvents } from "./shell/collectors.ts";
 import type { PiEventShape } from "./shell/collectors.ts";
@@ -19,10 +18,10 @@ import { applyInjection, removeInjection } from "./shell/injection.ts";
 import { createReadRuleTool } from "./shell/read-rule.ts";
 import type { ReadRuleToolDefinition } from "./shell/read-rule.ts";
 import { DEFAULT_BUDGET_TOKENS, renderTraceReport, runInjectionCycle } from "./shell/pipeline.ts";
+import { globalRulesDir, projectRulesDir, resolveBudget } from "./shell/rules-paths.ts";
 import type { PipelineDeps } from "./shell/pipeline.ts";
 import { initialState, transition } from "./src/state.ts";
 import type { SessionState } from "./src/state.ts";
-import { normalizedPath } from "./src/types.ts";
 import type { EvaluationTrace, NormalizedPath, Rule, RuleError } from "./src/types.ts";
 
 /** Handler context fields the wiring consumes (mirror of pi ExtensionContext). */
@@ -151,14 +150,14 @@ export default function piRulesMd(pi: ExtensionAPI): void {
 			discover: async (opts) => {
 				// Adjudicated dirs (parent-pinned, T13): global `~/.pi/agent/rules`, project `<cwd>/.pi/rules`.
 				const result = await discoverRules(discoveryDeps, cache, {
-					globalDir: join(homedir(), ".pi", "agent", "rules"),
-					projectDir: join(opts.cwd, ".pi", "rules"),
+					globalDir: globalRulesDir(homedir()),
+					projectDir: projectRulesDir(opts.cwd),
 					isProjectTrusted: opts.isProjectTrusted,
 				});
 				return { rules: result.rules, errors: result.errors };
 			},
 			scan: tinyglobbyScanner,
-			budget: DEFAULT_BUDGET_TOKENS,
+			budget: resolveBudget(process.env.PI_RULES_MAX_TOKENS, DEFAULT_BUDGET_TOKENS),
 		},
 		now: () => new Date(),
 	};

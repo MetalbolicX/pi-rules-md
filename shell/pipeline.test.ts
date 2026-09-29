@@ -10,6 +10,8 @@
  */
 import { homedir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("node:os", () => ({ homedir: () => "C:/Users/x" }));
 import { initialState } from "../src/state.ts";
 import type { SessionState } from "../src/state.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
@@ -174,28 +176,15 @@ describe("runInjectionCycle", () => {
 		expect(result.nextState).toBe(initialState);
 	});
 
-	it("PI_RULES_MAX_TOKENS overrides the default budget", async () => {
-		const large = ruleWith({ id: "large", content: "x".repeat(8400) });
-		const small = ruleWith({ id: "small", content: "y".repeat(400) });
-		const { deps } = depsWith([large, small]);
-		vi.stubEnv("PI_RULES_MAX_TOKENS", "3000");
-		try {
-			const result = await runInjectionCycle(inputWith(initialState, deps));
-			expect(result.trace.selection.active.map((rule) => rule.id)).toEqual(["large", "small"]);
-		} finally { vi.unstubAllEnvs(); }
-	});
-
-	it("invalid and non-positive PI_RULES_MAX_TOKENS values fall back to the default", async () => {
-		const large = ruleWith({ id: "large", content: "x".repeat(8400) });
-		const small = ruleWith({ id: "small", content: "y".repeat(400) });
-		const { deps } = depsWith([large, small]);
-		for (const value of ["invalid", "0", "-2"]) {
-			vi.stubEnv("PI_RULES_MAX_TOKENS", value);
-			try {
-				const result = await runInjectionCycle(inputWith(initialState, deps));
-				expect(result.trace.selection.active.map((rule) => rule.id)).toEqual(["large"]);
-			} finally { vi.unstubAllEnvs(); }
-		}
+	it("resolves a Windows-style global rules relative path", async () => {
+		const rule: Rule = {
+			...ruleWith({ id: "windows-global" }),
+			source: "global",
+			path: normalizedPath("C:/Users/x/.pi/agent/rules/ts.md"),
+		};
+		const { deps } = depsWith([rule]);
+		const result = await runInjectionCycle(inputWith(initialState, deps));
+		expect(result.trace.selection.active[0]?.relativePath).toBe("ts.md");
 	});
 
 	it("records budget drops in the trace while patching what fits", async () => {
