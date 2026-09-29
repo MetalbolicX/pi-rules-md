@@ -8,7 +8,7 @@
  * path shapes is the collectors'/scanner's job (later shell tasks).
  */
 import { describe, expect, it } from "vitest";
-import { deriveScanPatterns, matchRule, matchRules, withExistingPaths } from "./match.ts";
+import { deriveScanPatterns, matchRule, withExistingPaths } from "./match.ts";
 import { normalizedPath, ruleId } from "./types.ts";
 import type { EvaluationContext, MatchMode, NormalizedPath, Rule } from "./types.ts";
 
@@ -275,13 +275,13 @@ describe("matchRule — trigger bypass and absent globs", () => {
 	});
 });
 
-describe("matchRules", () => {
+describe("matchRule composition", () => {
 	it("evaluates each rule in order across mixed modes", () => {
 		const touched = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched" });
 		const exists = ruleWith({ id: "exists-rule", globs: ["docs/*.md"], match: "exists" });
 		const both = ruleWith({ id: "both-rule", globs: ["**/*.yml"], match: "both" });
 		const ctx = contextWith({ touchedPaths: ["src/a.ts"], existingPaths: ["docs/b.md"] });
-		expect(matchRules([touched, exists, both], ctx)).toEqual([
+		expect([touched, exists, both].map((rule) => matchRule(rule, ctx))).toEqual([
 			{
 				matched: true,
 				ruleId: touched.id,

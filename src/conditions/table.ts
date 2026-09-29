@@ -29,8 +29,8 @@
 import { err, ok } from "../result.ts";
 import type { Result } from "../result.ts";
 import type { EvaluationContext, MatchMode, NormalizedPath, RuleError } from "../types.ts";
-import type { Predicate } from "./combinators.ts";
 import { alwaysPredicate, branchPredicate, globMatcher, modelPredicate, toolsPredicate } from "./predicates.ts";
+import type { Predicate } from "./predicates.ts";
 
 /** Names of every condition key in rule format v1. */
 export type ConditionName = "globs" | "match" | "tools" | "model" | "branch" | "alwaysApply";

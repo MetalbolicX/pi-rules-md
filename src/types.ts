@@ -109,22 +109,17 @@ export type RuleErrorCode =
 	| "source-unreadable";
 
 /**
- * Why a rule file (or a whole rules source) could not be loaded. Discriminated
- * by `code`; `message` is human-readable and `file` optionally names the file
- * — or, for the source-level `source-unreadable`, the directory. Loading is
- * total: every failure is one of these values, never a throw.
+ * Why a rule file (or a whole rules source) could not be loaded. `code` is a
+ * machine-readable {@link RuleErrorCode}, `message` is human-readable and
+ * `file` optionally names the file — or, for the source-level
+ * `source-unreadable`, the directory. Loading is total: every failure is one
+ * of these values, never a throw.
  */
-export type RuleError =
-	| { readonly code: "missing-frontmatter"; readonly message: string; readonly file?: string }
-	| { readonly code: "yaml-syntax"; readonly message: string; readonly file?: string }
-	| { readonly code: "unknown-key"; readonly message: string; readonly file?: string }
-	| { readonly code: "invalid-value"; readonly message: string; readonly file?: string }
-	| { readonly code: "missing-description"; readonly message: string; readonly file?: string }
-	| { readonly code: "no-activation-condition"; readonly message: string; readonly file?: string }
-	| { readonly code: "match-without-globs"; readonly message: string; readonly file?: string }
-	| { readonly code: "invalid-version"; readonly message: string; readonly file?: string }
-	| { readonly code: "read-failure"; readonly message: string; readonly file?: string }
-	| { readonly code: "source-unreadable"; readonly message: string; readonly file?: string };
+export interface RuleError {
+	readonly code: RuleErrorCode;
+	readonly message: string;
+	readonly file?: string;
+}
 
 /** Snapshot of everything conditions may look at during an evaluation. */
 export interface EvaluationContext {

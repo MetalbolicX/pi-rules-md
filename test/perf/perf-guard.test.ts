@@ -2,7 +2,7 @@
  * Performance regression guard for the evaluation pipeline (NOT a benchmark).
  *
  * Runs a deterministic 300-rule × 300-path workload through the production
- * stages — deriveScanPatterns → picomatch-driven fake scan → matchRules →
+ * stages — deriveScanPatterns → picomatch-driven fake scan → matchRule →
  * selectRules → renderSection — and asserts the total wall time stays under
  * a GENEROUS 2000 ms ceiling. The point is to fail loudly on accidental
  * complexity blowups (quadratic scans, matcher rebuild storms), not to
@@ -17,7 +17,7 @@
  */
 import * as picomatchModule from "picomatch";
 import { describe, expect, it } from "vitest";
-import { deriveScanPatterns, matchRules } from "../../src/match.ts";
+import { deriveScanPatterns, matchRule } from "../../src/match.ts";
 import { renderSection } from "../../src/render.ts";
 import type { RenderEntry } from "../../src/render.ts";
 import { selectRules } from "../../src/select.ts";
@@ -41,7 +41,7 @@ const CEILING_MS = 2000;
 const BUDGET_TOKENS = 600;
 
 describe("perf guard — 300 rules × 300 paths (regression guard, not a benchmark)", () => {
-	it("deriveScanPatterns → matchRules → selectRules → renderSection finishes under 2000ms", () => {
+	it("deriveScanPatterns → matchRule → selectRules → renderSection finishes under 2000ms", () => {
 		const rng = createSeeded(0x50455246);
 
 		// Path universe aligned with the shared glob pools so scans produce a
@@ -75,7 +75,7 @@ describe("perf guard — 300 rules × 300 paths (regression guard, not a benchma
 		const existingPaths = universe.filter((path) => matchesAnyPattern(path));
 		const enriched: EvaluationContext = { ...ctx, existingPaths };
 
-		const results = matchRules(rules, enriched);
+		const results = rules.map((rule) => matchRule(rule, enriched));
 		const reasonsByRuleId = new Map<string, readonly MatchReason[]>();
 		for (let index = 0; index < rules.length; index += 1) {
 			const rule = rules[index];

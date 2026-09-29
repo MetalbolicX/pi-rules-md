@@ -13,6 +13,9 @@
 import * as picomatchModule from "picomatch";
 import type { EvaluationContext, NormalizedPath } from "../types.ts";
 
+/** A pure unary predicate over a value of type A. */
+export type Predicate<A> = (a: A) => boolean;
+
 /** picomatch matcher for a single path. */
 type Matcher = (path: string) => boolean;
 

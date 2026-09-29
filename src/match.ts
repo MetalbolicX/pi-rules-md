@@ -9,7 +9,7 @@
  * and attribute MatchReasons to the positive patterns that fired.
  *
  * Functional core / imperative shell:
- * - `matchRule` and `matchRules` are pure — no I/O, no module state.
+ * - `matchRule` is pure — no I/O, no module state.
  * - The project scan for "exists" is a seam: `withExistingPaths` takes the
  *   scan call as an injected {@link GlobScanner} parameter, so the tinyglobby
  *   adapter lives with the wiring (engine/shell tasks), not here. Tests
@@ -123,9 +123,6 @@ export const matchRule = (rule: Rule, ctx: EvaluationContext): MatchResult => {
 	return { matched: true, ruleId: rule.id, reasons };
 };
 
-/** Evaluates every rule in order — the mixed-mode entry point for the engine. */
-export const matchRules = (rules: readonly Rule[], ctx: EvaluationContext): readonly MatchResult[] =>
-	rules.map((rule) => matchRule(rule, ctx));
 
 /**
  * Fills the context's `existingPaths` by scanning the project once for all

@@ -4,7 +4,7 @@ import type { RuleMeta } from "../frontmatter.ts";
 import type { Result } from "../result.ts";
 import { normalizedPath, ruleId } from "../types.ts";
 import type { EvaluationContext, NormalizedPath, Rule, RuleError } from "../types.ts";
-import type { Predicate } from "./combinators.ts";
+import type { Predicate } from "./predicates.ts";
 import { CONDITION_KEYS, CONDITION_SPECS, conditionSpec } from "./table.ts";
 import type { ConditionName, ConditionValueOf } from "./table.ts";
 
