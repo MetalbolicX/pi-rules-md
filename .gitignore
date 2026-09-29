@@ -3,3 +3,6 @@ dist/
 *.log
 # Local Pi runtime state
 .atl/
+
+# Local scratch verification scripts
+odd/scratch-*.mjs
