@@ -362,6 +362,31 @@ describe("discover — mtime cache", () => {
 		expect(second.cache.has(normalizedPath(`${PROJECT_DIR}/gone.md`))).toBe(false);
 	});
 
+	it("reports non-ENOENT stat failures without caching and continues discovery", async () => {
+		const deps: DiscoveryDeps = {
+			listRuleFiles: async (dir) => (dir === PROJECT_DIR ? ["locked.md", "a.md"] : []),
+			stat: async (path) => {
+				if (path.endsWith("locked.md")) {
+					throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+				}
+				return { mtimeMs: 1 };
+			},
+			readFile: async () => ruleText("A"),
+		};
+		const lockedPath = normalizedPath(`${PROJECT_DIR}/locked.md`);
+		const result = await discover(deps, new Map(), opts(true));
+
+		expect(result.rules.map((rule) => rule.id)).toEqual(["a"]);
+		expect(result.errors).toEqual([
+			{
+				code: "read-failure",
+				message: "failed to stat rule file: EACCES: permission denied",
+				file: lockedPath,
+			},
+		]);
+		expect(result.cache.has(lockedPath)).toBe(false);
+	});
+
 	it("skips files that vanish between listing and stat: no rule, no error, no cache entry", async () => {
 		const deps: DiscoveryDeps = {
 			listRuleFiles: async (dir) => (dir === PROJECT_DIR ? ["a.md", "gone.md"] : []),

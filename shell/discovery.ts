@@ -38,10 +38,12 @@
  *   discovery continues with the remaining sources.
  * - A file that vanishes between listing and stat/read (ENOENT from stat or
  *   read) is skipped silently — no rule, no error, absent from the next
- *   cache. A non-ENOENT read failure (permissions, wrong file type, …) is a
- *   genuine failure: it is collected as a `read-failure` error naming the
- *   file and cached alongside the mtime, reusing the parse-error cache
- *   semantics instead of conflating with vanished-skip.
+ *   cache. A non-ENOENT stat failure is collected as a `read-failure` error
+ *   naming the file but is not cached because no mtime is known. A non-ENOENT
+ *   read failure (permissions, wrong file type, …) is collected as a
+ *   `read-failure` error naming the file and cached alongside the mtime,
+ *   reusing the parse-error cache semantics instead of conflating with
+ *   vanished-skip.
  * - mtime cache keyed by absolute normalized path: an entry with an
  *   unchanged mtimeMs is reused (rule OR error) without a read; a changed
  *   mtime re-reads and re-parses; files no longer listed are dropped.
@@ -153,9 +155,11 @@ type LoadedRule =
  * (no read) and the same entry object carries into the next cache; a cached
  * rule whose resolved id changed (a colliding file appeared or vanished) is
  * refreshed onto a new entry with the new id. A stat ENOENT or a read ENOENT
- * means the file vanished mid-scan: skip silently. A non-ENOENT read failure
- * is returned as a `read-failure` error and cached alongside the mtime.
- * Parse failures are returned as errors and cached alongside the mtime.
+ * means the file vanished mid-scan: skip silently. A non-ENOENT stat failure
+ * is returned as a `read-failure` error without caching (no mtime is known).
+ * A non-ENOENT read failure is returned as a `read-failure` error and cached
+ * alongside the mtime. Parse failures are returned as errors and cached
+ * alongside the mtime.
  */
 const loadRule = async (
 	deps: DiscoveryDeps,
@@ -168,8 +172,16 @@ const loadRule = async (
 	let statResult: { readonly mtimeMs: number };
 	try {
 		statResult = await deps.stat(abs);
-	} catch {
-		return { kind: "skipped" };
+	} catch (cause) {
+		if (isEnoent(cause)) {
+			return { kind: "skipped" };
+		}
+		const error: RuleError = {
+			code: "read-failure",
+			message: `failed to stat rule file: ${cause instanceof Error ? cause.message : String(cause)}`,
+			file: abs,
+		};
+		return { kind: "error", error };
 	}
 	const cached = cache.get(abs);
 	if (cached !== undefined && cached.mtimeMs === statResult.mtimeMs) {
