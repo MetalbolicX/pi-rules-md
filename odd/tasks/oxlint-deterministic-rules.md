@@ -84,6 +84,12 @@ CSSStyleSheet.replaceSync / web-API preference.
   - `src/frontmatter.ts`: `frontmatter["description"]` destructured.
 - Final state: `pnpm lint` exit 0 (zero findings), `pnpm typecheck` exit 0,
   `pnpm test` 367/367 across 25 files.
-- No work-unit commit: user has not asked for one (safety rule); changeset is
-  staged-ready: `.oxlintrc.json`, `package.json`, `pnpm-lock.yaml`, plus the 6
-  fixed source/test files and this doc.
+- Native review: lineage `review-05f0df723ba0e56b`, medium tier, single
+  `review-reliability` lens (forecast: 1 model run, pi_host_relay), closed
+  `approved`; acknowledgement burned authority (`native-approved-acknowledgement-
+  completed`). ASSESS after the burn: `nativeReviewOutcome: closed` (explicit),
+  writer profile large → on-path plan, writer self-verification is the record,
+  no separate verifier.
+- Work-unit commit: `6382c33 feat(lint): encode deterministic JS/TS rules as an
+  oxlint gate` on branch `feat/oxlint-deterministic-rules` (branched from main;
+  10 files, 431 insertions, 25 deletions — exactly the reviewed candidate set).
