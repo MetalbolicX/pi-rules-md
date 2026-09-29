@@ -16,7 +16,7 @@ import { initialState } from "../src/state.ts";
 import type { SessionState } from "../src/state.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
 import type { EvaluationTrace, Rule, RuleError } from "../src/types.ts";
-import { DEFAULT_BUDGET_TOKENS, runInjectionCycle } from "./pipeline.ts";
+import { DEFAULT_BUDGET_TOKENS, renderTraceReport, runInjectionCycle } from "./pipeline.ts";
 import type { DiscoverOptions, PipelineDeps, PipelineInput } from "./pipeline.ts";
 
 /** Fixed wall-clock input: every cycle in this suite evaluates at this instant. */
@@ -213,5 +213,31 @@ describe("runInjectionCycle", () => {
 		expect(first.nextState).not.toBe(state);
 		// The input state object is untouched by either run.
 		expect(state).toEqual(snapshot);
+	});
+
+	describe("renderTraceReport", () => {
+		it("includes configured condition descriptions for unmatched rules found in rules", async () => {
+			const rule: Rule = {
+				...ruleWith({ id: "configured", globs: ["**/*.ts"], alwaysApply: false }),
+				model: "other-model",
+			};
+			const { deps } = depsWith([rule]);
+			const result = await runInjectionCycle({ ...inputWith(initialState, deps), trusted: false });
+			const report = renderTraceReport(result.trace, [], [rule]);
+
+			expect(report).toContain("  configured: files matching: **/*.ts");
+			expect(report).toContain("  configured: model: other-model");
+		});
+
+		it("preserves the existing report output when rules are omitted", async () => {
+			const { deps } = depsWith([ruleWith({ id: "always-on" })]);
+			const result = await runInjectionCycle(inputWith(initialState, deps));
+			expect(renderTraceReport(result.trace, [])).toEqual([
+				"Rules evaluation report",
+				"Evaluated at: 2026-07-14T12:00:00.000Z",
+				"active: always-on (always active)",
+				"injected: section pi-rules-md (hash " + result.block?.contentHash + ")",
+			]);
+		});
 	});
 });

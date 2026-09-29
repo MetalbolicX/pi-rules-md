@@ -13,8 +13,8 @@ style, no `var`, no `any`, `node:` prefix imports, `strict` never disabled.
 | # | Task | Finding | Status | Commit |
 |---|---|---|---|---|
 | 0 | Housekeeping: land dep bumps, ignore scratch, commit odd/tasks docs | L10 | done | (below) |
-| 1 | Basename-level intent-glob compatibility + engine cleanup | H1, L9 | pending | — |
-| 2 | Unified rules-path derivation + budget at composition root | M2, M5 | pending | — |
+| 1 | Basename-level intent-glob compatibility + engine cleanup | H1, L9 | done | 5b9ba02 |
+| 2 | Unified rules-path derivation + budget at composition root | M2, M5 | done | 95fd9d6 |
 | 3 | Shared trigger vocabulary + wire `describe` into /rules report | M4, B | pending | — |
 | 4 | Prune dead surface + collapse RuleError union | M3, L6 | pending | — |
 | 5 | Discovery stat: only ENOENT skips silently + intent.ts tabs | L8, L7 | pending | — |

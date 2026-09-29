@@ -135,7 +135,7 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 		api.registerCommand("rules", {
 			description: "Show why each pi-rules-md rule is active or inactive",
 			handler: async (_args, ctx) => {
-				ctx.ui.notify(renderTraceReport(lastTrace, lastErrors).join("\n"), "info");
+				ctx.ui.notify(renderTraceReport(lastTrace, lastErrors, lastDiscoveredRules).join("\n"), "info");
 			},
 		});
 	};

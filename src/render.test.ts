@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { renderSection, sectionId } from "./render.ts";
+import { renderSection, sectionId, triggerPhrase } from "./render.ts";
 import type { RenderEntry } from "./render.ts";
 import { normalizedPath, ruleId } from "./types.ts";
 import type { MatchReason, Rule } from "./types.ts";
@@ -38,6 +38,16 @@ const entry = (rule: Rule, reasons: readonly MatchReason[] = []): RenderEntry =>
 
 /** Reads a checked-in golden file byte-exactly (the only I/O these tests do). */
 const golden = (name: string): string => readFileSync(new URL(`./render.golden/${name}`, import.meta.url), "utf8");
+
+describe("triggerPhrase", () => {
+	it("returns the exact phrase for every match reason", () => {
+		expect(triggerPhrase({ kind: "always" })).toBe("always active");
+		expect(triggerPhrase({ kind: "glob", pattern: "**/*.ts" })).toBe("glob `**/*.ts`");
+		expect(triggerPhrase({ kind: "tool", tool: "bash" })).toBe("tool `bash`");
+		expect(triggerPhrase({ kind: "model", model: "gpt-test" })).toBe("model `gpt-test`");
+		expect(triggerPhrase({ kind: "branch", branch: "main" })).toBe("branch `main`");
+	});
+});
 
 describe("sectionId", () => {
 	it("is the fixed pi-rules-md constant", () => {

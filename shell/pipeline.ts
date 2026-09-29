@@ -29,7 +29,9 @@
  *   root, which closes over it when building `deps.discover`.
  */
 import { homedir } from "node:os";
+import { conditionSpec, CONDITION_KEYS } from "../src/conditions/table.ts";
 import { evaluate } from "../src/engine.ts";
+import { triggerPhrase } from "../src/render.ts";
 import type { GlobScanner } from "../src/match.ts";
 import { transition } from "../src/state.ts";
 import type { SessionState } from "../src/state.ts";
@@ -143,28 +145,26 @@ export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineR
 	return { nextState, trace, decision, block };
 };
 
-/** Trigger phrase for one match reason — mirrors the renderer's vocabulary. */
-const reasonPhrase = (reason: MatchReason): string => {
-	switch (reason.kind) {
-		case "always":
-			return "always active";
-		case "glob":
-			return `glob \`${reason.pattern}\``;
-		case "tool":
-			return `tool \`${reason.tool}\``;
-		case "model":
-			return `model \`${reason.model}\``;
-		case "branch":
-			return `branch \`${reason.branch}\``;
+/** Lines for one rule outcome: active rules name their reasons, inactive ones their failure. */
+const configuredLines = (rule: Rule | undefined): string[] => {
+	if (rule === undefined) {
+		return [];
 	}
+	return CONDITION_KEYS.flatMap((name) => {
+		const value = rule[name];
+		if (value === undefined || (name === "alwaysApply" && value !== true)) {
+			return [];
+		}
+		return [`  configured: ${conditionSpec(name).describe(value)}`];
+	});
 };
 
 /** Lines for one rule outcome: active rules name their reasons, inactive ones their failure. */
-const resultLines = (results: EvaluationTrace["results"]): string[] =>
-	results.map((result) =>
+const resultLines = (results: EvaluationTrace["results"], rules: readonly Rule[] = []): string[] =>
+	results.flatMap((result) =>
 		result.matched
-			? `active: ${result.ruleId} (${result.reasons.map(reasonPhrase).join(" · ")})`
-			: `inactive: ${result.ruleId} (${result.reason})`,
+			? [`active: ${result.ruleId} (${result.reasons.map(triggerPhrase).join(" · ")})`]
+			: [`inactive: ${result.ruleId} (${result.reason})`, ...configuredLines(rules.find((rule) => rule.id === result.ruleId))],
 	);
 
 /** Lines for the selection outcome: every dropped rule with its cause. */
@@ -182,7 +182,7 @@ const errorLines = (errors: readonly RuleError[]): string[] =>
  * (only when a block was rendered). Pure and deterministic — no trace means
  * exactly one "No evaluation yet." line.
  */
-export const renderTraceReport = (trace: EvaluationTrace | undefined, errors: readonly RuleError[]): readonly string[] => {
+export const renderTraceReport = (trace: EvaluationTrace | undefined, errors: readonly RuleError[], rules?: readonly Rule[]): readonly string[] => {
 	if (trace === undefined) {
 		return ["No evaluation yet."];
 	}
@@ -190,7 +190,7 @@ export const renderTraceReport = (trace: EvaluationTrace | undefined, errors: re
 		"Rules evaluation report",
 		`Evaluated at: ${new Date(trace.evaluatedAt).toISOString()}`,
 	];
-	lines.push(...resultLines(trace.results));
+	lines.push(...resultLines(trace.results, rules));
 	lines.push(...droppedLines(trace));
 	lines.push(...errorLines(errors));
 	if (trace.block !== undefined) {

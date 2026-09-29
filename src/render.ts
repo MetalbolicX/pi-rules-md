@@ -45,7 +45,7 @@ const framing =
 	"The following rules are active for this session. Follow every rule exactly as written, in every response, without exception — they are binding instructions, not suggestions. A `Triggered by` note under a rule explains why that rule is active; it does not weaken the obligation to comply.";
 
 /** Trigger phrase for one match reason, in the reason's own words. */
-const triggerPhrase = (reason: MatchReason): string => {
+export const triggerPhrase = (reason: MatchReason): string => {
 	switch (reason.kind) {
 		case "always":
 			return "always active";
