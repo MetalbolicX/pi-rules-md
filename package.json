@@ -24,6 +24,7 @@
 		]
 	},
 	"scripts": {
+		"lint": "oxlint",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest"
@@ -38,6 +39,7 @@
 		"@earendil-works/pi-coding-agent": "^0.87.1",
 		"@types/node": "^26.6.2",
 		"@types/picomatch": "^4.0.3",
+		"oxlint": "^1.85.0",
 		"typescript": "~7.0.2",
 		"vitest": "^5.0.1"
 	}

@@ -87,7 +87,7 @@ export const matchRule = (rule: Rule, ctx: EvaluationContext): MatchResult => {
 		// Vacuous path condition — see module contract notes.
 		return { matched: true, ruleId: rule.id, reasons: [] };
 	}
-	const globs = rule.globs;
+	const { globs } = rule;
 	const matchesRule = globMatcher(globs);
 	// Mode selects which pools are considered; "both" unions them.
 	const pool: readonly NormalizedPath[] = [
@@ -96,7 +96,7 @@ export const matchRule = (rule: Rule, ctx: EvaluationContext): MatchResult => {
 	];
 	const hits = pool.filter(matchesRule);
 	const basename = (glob: string): string => glob.slice(glob.lastIndexOf("/") + 1);
-	const probe = (glob: string): string => glob.replace(/[\*\?]/g, "a");
+	const probe = (glob: string): string => glob.replace(/[*?]/g, "a");
 	const intentHits = (ctx.intentGlobs ?? []).filter((intent) => {
 		const intentBasename = basename(intent);
 		const intentProbe = probe(intentBasename);

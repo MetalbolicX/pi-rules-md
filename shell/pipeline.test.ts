@@ -15,7 +15,7 @@ vi.mock("node:os", () => ({ homedir: () => "C:/Users/x" }));
 import { initialState } from "../src/state.ts";
 import type { SessionState } from "../src/state.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
-import type { EvaluationTrace, Rule, RuleError } from "../src/types.ts";
+import type { Rule, RuleError } from "../src/types.ts";
 import { DEFAULT_BUDGET_TOKENS, renderTraceReport, runInjectionCycle } from "./pipeline.ts";
 import type { DiscoverOptions, PipelineDeps, PipelineInput } from "./pipeline.ts";
 
@@ -236,7 +236,7 @@ describe("runInjectionCycle", () => {
 				"Rules evaluation report",
 				"Evaluated at: 2026-07-14T12:00:00.000Z",
 				"active: always-on (always active)",
-				"injected: section pi-rules-md (hash " + result.block?.contentHash + ")",
+				`injected: section pi-rules-md (hash ${result.block?.contentHash})`,
 			]);
 		});
 	});

@@ -296,7 +296,7 @@ describe("table — frontmatter round-trip", () => {
 			["branch", "branch: b"],
 			["alwaysApply", "alwaysApply: true"],
 		];
-		for (const [name, body] of bodies) {
+		for (const [, body] of bodies) {
 			const rule = okOf(parseRule(fm(`description: x\nversion: 1\n${body}`), meta));
 			expect(rule.id).toBe(ruleId("project:.pi/rules/t.md"));
 		}

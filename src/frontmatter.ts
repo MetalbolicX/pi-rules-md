@@ -172,7 +172,7 @@ export const parseRule = (raw: string, meta: RuleMeta): Result<Rule, RuleError> 
 		);
 	}
 
-	const description = frontmatter["description"];
+	const { description } = frontmatter;
 	if (typeof description !== "string" || description.trim() === "") {
 		return err(
 			ruleError(

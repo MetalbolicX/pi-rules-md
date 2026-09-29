@@ -1,0 +1,93 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"env": { "builtin": true, "node": true, "es2024": true },
+	"plugins": ["typescript", "oxc", "unicorn", "import", "promise", "jsdoc"],
+	"categories": {
+		"correctness": "error"
+	},
+	"ignorePatterns": ["node_modules/", "dist/", "coverage/", "src/render.golden/"],
+	"rules": {
+		"no-var": "error",
+		"prefer-const": "error",
+		"prefer-template": "error",
+		"no-useless-concat": "error",
+		"logical-assignment-operators": "error",
+		"prefer-destructuring": "error",
+		"prefer-object-spread": "error",
+		"prefer-object-has-own": "error",
+		"guard-for-in": "error",
+		"prefer-arrow-callback": "error",
+		"arrow-body-style": ["error", "as-needed"],
+		"prefer-rest-params": "error",
+		"prefer-spread": "error",
+		"no-throw-literal": "error",
+		"prefer-promise-reject-errors": "error",
+		"no-restricted-properties": [
+			"error",
+			{
+				"property": "innerHTML",
+				"message": "Use textContent; sanitized HTML only via insertAdjacentHTML (see generic JS/TS rule)."
+			}
+		],
+
+		"typescript/no-explicit-any": "error",
+		"typescript/prefer-as-const": "error",
+		"typescript/ban-ts-comment": [
+			"error",
+			{
+				"ts-expect-error": "allow-with-description",
+				"ts-ignore": true,
+				"ts-nocheck": true,
+				"minimumDescriptionLength": 3
+			}
+		],
+		"typescript/no-require-imports": "error",
+		"typescript/prefer-optional-chain": "error",
+
+		"import/no-commonjs": ["error", { "allowConditionalRequire": false }],
+		"import/no-amd": "error",
+
+		"unicorn/filename-case": ["error", { "cases": { "kebabCase": true, "camelCase": true } }],
+		"unicorn/prefer-at": "error",
+		"unicorn/prefer-negative-index": "error",
+		"unicorn/prefer-spread": "error",
+		"unicorn/prefer-default-parameters": "error",
+		"unicorn/prefer-object-from-entries": "error",
+		"unicorn/prefer-node-protocol": "error",
+		"unicorn/prefer-import-meta-properties": "error",
+		"unicorn/prefer-dom-node-text-content": "error",
+		"unicorn/prefer-top-level-await": "error",
+		"unicorn/error-message": "error",
+		"unicorn/throw-new-error": "error",
+
+		"promise/prefer-await-to-then": "error",
+		"promise/prefer-await-to-callbacks": "error"
+	},
+	"overrides": [
+		{
+			"files": ["**/*.test.ts", "**/*.test.js", "**/*.spec.ts", "**/*.spec.js", "vitest.config.ts"],
+			"rules": {
+				"promise/prefer-await-to-callbacks": "off",
+				"unicorn/prefer-top-level-await": "off"
+			}
+		},
+		{
+			"files": ["**/*.test.ts", "**/*.spec.ts", "vitest.config.ts"],
+			"rules": {
+				"unicorn/filename-case": "off"
+			}
+		},
+		{
+			"files": ["**/*.js", "**/*.mjs", "**/*.cjs"],
+			"rules": {
+				"jsdoc/require-param": "warn",
+				"jsdoc/require-param-description": "warn",
+				"jsdoc/require-param-name": "warn",
+				"jsdoc/require-param-type": "warn",
+				"jsdoc/require-returns": "warn",
+				"jsdoc/require-returns-description": "warn",
+				"jsdoc/require-returns-type": "warn"
+			}
+		}
+	]
+}

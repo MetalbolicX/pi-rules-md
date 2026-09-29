@@ -39,7 +39,7 @@ import { injectionDecision } from "./injection.ts";
 import type { InjectionDecision } from "./injection.ts";
 import { normalizedPath } from "../src/types.ts";
 import { globalRulesDir, projectRulesDir } from "./rules-paths.ts";
-import type { EvaluationContext, EvaluationTrace, InjectionBlock, MatchReason, Rule, RuleError } from "../src/types.ts";
+import type { EvaluationContext, EvaluationTrace, InjectionBlock, Rule, RuleError } from "../src/types.ts";
 
 /** Default selection budget: 2000 estimated tokens (~8000 characters). */
 export const DEFAULT_BUDGET_TOKENS = 2000;
@@ -133,7 +133,7 @@ export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineR
 		});
 	const trace = await evaluate(rules, ctx, { scan: input.deps.scan, budget: input.deps.budget, prompt: input.prompt });
 
-	const block = trace.block;
+	const { block } = trace;
 	const decision = injectionDecision(block, input.state.lastInjectedHash);
 	const nextState =
 		decision.action === "patch" && block !== undefined

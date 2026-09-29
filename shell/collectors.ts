@@ -40,8 +40,9 @@ import type { NormalizedPath } from "../src/types.ts";
 
 /**
  * Minimal structural mirror of the pi extension events this collector
- * consumes. `args: any` matches Pi's installed ToolExecutionStartEvent
- * declaration; the mapper treats it as untrusted and guards every access.
+ * consumes. `args: unknown` matches Pi's installed ToolExecutionStartEvent
+ * declaration (SDK types it `any`); the mapper treats it as untrusted and
+ * guards every access.
  */
 export type PiEventShape =
 	| { readonly type: "session_compact" }
@@ -51,8 +52,8 @@ export type PiEventShape =
 			readonly type: "tool_execution_start";
 			readonly toolCallId: string;
 			readonly toolName: string;
-			/** Pi SDK types.d.ts:673-678 declares args as any. */
-			readonly args: any;
+			/** Pi SDK types.d.ts:673-678 declares args as any; widened to unknown. */
+			readonly args: unknown;
 	  };
 
 /** Relativizes a raw path against `cwd`: strip a `cwd + "/"` prefix, else keep. */
