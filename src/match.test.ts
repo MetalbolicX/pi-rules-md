@@ -103,9 +103,30 @@ describe("deriveScanPatterns", () => {
 });
 
 describe("intent globs", () => {
-	it("intent globs satisfy a globs condition without any path in the pool", () => {
+	it("matches identical basename-level patterns and attributes the intent reason", () => {
+		const result = matchRule(ruleWith({ globs: ["*.py"] }), contextWith({ intentGlobs: ["*.py"] }));
+		expect(result).toMatchObject({ matched: true, reasons: [{ kind: "glob", pattern: "intent: *.py" }] });
+	});
+
+	it("matches identical path-bearing patterns by basename", () => {
+		const result = matchRule(
+			ruleWith({ globs: ["src/**/*.py"] }),
+			contextWith({ intentGlobs: ["src/**/*.py"] }),
+		);
+		expect(result.matched).toBe(true);
+	});
+
+	it("matches a basename intent against a recursive rule glob", () => {
 		const result = matchRule(ruleWith({ globs: ["**/*.py"] }), contextWith({ intentGlobs: ["*.py"] }));
 		expect(result).toMatchObject({ matched: true, reasons: [{ kind: "glob", pattern: "intent: *.py" }] });
+	});
+
+	it("does not match an unrelated intent extension", () => {
+		expect(matchRule(ruleWith({ globs: ["**/*.rs"] }), contextWith({ intentGlobs: ["*.py"] })).matched).toBe(false);
+	});
+
+	it("does not match a specific compound suffix against an unrelated intent", () => {
+		expect(matchRule(ruleWith({ globs: ["*.test.ts"] }), contextWith({ intentGlobs: ["*.py"] })).matched).toBe(false);
 	});
 
 	it("intent globs never enter the context path pool", () => {

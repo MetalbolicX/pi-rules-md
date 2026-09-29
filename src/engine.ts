@@ -134,7 +134,7 @@ export const evaluate = async (
 	const outcomes = rules.map((rule) =>
 		isTrustGated(rule, ctx)
 			? { rule, result: trustGateResult(rule, ctx) }
-			: { rule, result: evaluateRule(rule, { ...enriched, intentGlobs }) },
+			: { rule, result: evaluateRule(rule, enriched) },
 	);
 	const results = outcomes.map((outcome) => outcome.result);
 

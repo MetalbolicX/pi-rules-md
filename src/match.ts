@@ -95,9 +95,18 @@ export const matchRule = (rule: Rule, ctx: EvaluationContext): MatchResult => {
 		...(rule.match === "touched" ? [] : ctx.existingPaths),
 	];
 	const hits = pool.filter(matchesRule);
-	const intentHits = (ctx.intentGlobs ?? []).filter((intent) =>
-		globs.some((pattern) => !pattern.startsWith("!") && globMatcher([pattern])(normalizedPath(`intent/${intent.slice(intent.lastIndexOf("/") + 1)}`))),
-	);
+	const basename = (glob: string): string => glob.slice(glob.lastIndexOf("/") + 1);
+	const probe = (glob: string): string => glob.replace(/[\*\?]/g, "a");
+	const intentHits = (ctx.intentGlobs ?? []).filter((intent) => {
+		const intentBasename = basename(intent);
+		const intentProbe = probe(intentBasename);
+		return globs.some((pattern) => {
+			if (!isPositive(pattern)) return false;
+			const patternBasename = basename(pattern);
+			const patternProbe = probe(patternBasename);
+			return globMatcher([patternBasename])(normalizedPath(intentProbe)) || globMatcher([intentBasename])(normalizedPath(patternProbe));
+		});
+	});
 	if (hits.length === 0 && intentHits.length === 0) {
 		return { matched: false, ruleId: rule.id, reason: unmatchedReason(rule.match, globs) };
 	}
