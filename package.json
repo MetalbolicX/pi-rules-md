@@ -10,6 +10,12 @@
 		"system-prompt"
 	],
 	"license": "MIT",
+	"bin": {
+		"pi-rules": "dist/cli.mjs"
+	},
+	"engines": {
+		"node": ">=22.19.0"
+	},
 	"author": "MetalbolicX",
 	"files": [
 		"index.ts",
@@ -26,6 +32,8 @@
 	"scripts": {
 		"lint": "oxlint",
 		"typecheck": "tsc --noEmit",
+		"build": "rolldown -c",
+		"prepublishOnly": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
 		"test": "vitest run",
 		"test:watch": "vitest"
 	},
@@ -40,6 +48,7 @@
 		"@types/node": "^26.6.2",
 		"@types/picomatch": "^4.0.3",
 		"oxlint": "^1.85.0",
+		"rolldown": "^1.2.4",
 		"typescript": "~7.0.2",
 		"vitest": "^5.0.1"
 	}
