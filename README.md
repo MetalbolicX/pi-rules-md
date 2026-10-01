@@ -103,15 +103,37 @@ final token estimate.
 
 ## Install
 
+Recommended: install the npm package through the CLI wrapper:
+
 ```sh
-pi install <path-to-this-repo>
+npx pi-rules-md install
 ```
 
-or for development:
+The wrapper invokes the `pi` CLI for package changes; it never edits
+`settings.json` directly.
+
+| Command | Description |
+| --- | --- |
+| `pi-rules install` | Install pi-rules-md. |
+| `pi-rules uninstall` | Remove pi-rules-md. |
+| `pi-rules update` | Update an unpinned npm installation. |
+| `pi-rules status` | Show installation status and available updates. |
+| `pi-rules doctor` | Diagnose installation health. |
+
+Common options: `--local` uses project scope for install, uninstall, and
+update; `--purge` removes the package directory during uninstall; `--dry-run`
+prints actions without changing anything; `--agent-dir <dir>` selects a Pi
+agent directory.
+
+For local development, load the source directly:
 
 ```sh
 pi --extension ./index.ts
 ```
+
+For a local-path install, run `pnpm build` first; the package manifest loads
+`./dist/extension.js`. Source entries track the working tree; npm entries are
+updated with `pi-rules update`.
 
 ## Commands
 

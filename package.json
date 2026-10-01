@@ -18,6 +18,7 @@
 	},
 	"author": "MetalbolicX",
 	"files": [
+		"dist",
 		"index.ts",
 		"src",
 		"shell",
@@ -26,7 +27,7 @@
 	],
 	"pi": {
 		"extensions": [
-			"./index.ts"
+			"./dist/extension.js"
 		]
 	},
 	"scripts": {
