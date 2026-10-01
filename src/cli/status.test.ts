@@ -87,4 +87,12 @@ describe("statusFlow", () => {
     expect(f.io.stdout).toContain("personal: npm:pi-rules-md (npm, installed unknown)");
     expect(f.io.stdout.some((line) => line.startsWith("stale:"))).toBe(false);
   });
+
+  test("skips latest and stale lines when registry fetch returns null", async () => {
+    const f = await fixture(["npm:pi-rules-md"]);
+    f.options.fetchImpl = (async () => ({ ok: false, json: async () => ({}) }) as Response) as typeof fetch;
+    expect(await statusFlow(f.options)).toBe(0);
+    expect(f.io.stdout.some((line) => line.startsWith("latest:"))).toBe(false);
+    expect(f.io.stdout.some((line) => line.startsWith("stale:"))).toBe(false);
+  });
 });

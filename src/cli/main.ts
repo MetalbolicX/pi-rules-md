@@ -5,6 +5,7 @@ import { installFlow } from "./install.js";
 import { uninstallFlow } from "./uninstall.js";
 import { updateFlow } from "./update.js";
 import { statusFlow } from "./status.js";
+import { doctorFlow } from "./doctor.js";
 
 export const USAGE = `Usage: pi-rules <command> [options]
 
@@ -46,15 +47,12 @@ export class NotImplementedFlowError extends Error {
 	}
 }
 
-const notImplemented = (name: string) => async (_options: FlowOptions): Promise<number> => {
-	throw new NotImplementedFlowError(name);
-};
 const defaultFlows: CliFlows = {
 	install: installFlow,
 	uninstall: uninstallFlow,
 	update: updateFlow,
 	status: statusFlow,
-	doctor: notImplemented("doctor"),
+	doctor: doctorFlow,
 };
 
 export async function runCli(args: string[], io: CliIO, flows: CliFlows = defaultFlows): Promise<number> {
