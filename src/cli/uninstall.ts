@@ -9,7 +9,7 @@ import { loadScopes, type SettingsScope } from "./scopes.js";
 import type { SettingsResult } from "./settings.js";
 
 function ioFor(options: FlowOptions): CliIO {
-  return options.io ?? { env: process.env, stdout: [], stderr: [] };
+  return options.io ?? { env: process.env, stdout: { push: (...lines: string[]) => console.log(...lines) } as unknown as string[], stderr: { push: (...lines: string[]) => console.error(...lines) } as unknown as string[] };
 }
 
 function settingsProblem(settings: SettingsResult): string | undefined {
@@ -25,17 +25,38 @@ function isStrictlyInside(parent: string, child: string): boolean {
 
 export function purgeStore(agentDir: string, io: CliIO, dryRun: boolean): number {
   const storePath = resolveNpmStorePath(agentDir);
+  let realAgent: string;
+  let npm: string;
+  let nodeModules: string;
   try {
-    const realAgent = realpathSync(agentDir);
-    const npm = realpathSync(path.join(agentDir, "npm"));
-    const nodeModules = realpathSync(path.join(agentDir, "npm", "node_modules"));
-    const store = realpathSync(storePath);
-    if (!isStrictlyInside(realAgent, npm) || !isStrictlyInside(npm, nodeModules)
-      || !isStrictlyInside(nodeModules, store) || path.basename(storePath) !== "pi-rules-md") {
-      io.stderr.push(`refusing to purge unsafe package store path: ${storePath}`);
-      return 1;
+    realAgent = realpathSync(agentDir);
+    npm = realpathSync(path.join(agentDir, "npm"));
+    nodeModules = realpathSync(path.join(agentDir, "npm", "node_modules"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      io.stdout.push("✓ package store already absent");
+      return 0;
     }
-  } catch {
+    io.stderr.push(`refusing to purge unsafe package store path: ${storePath}`);
+    return 1;
+  }
+  if (!isStrictlyInside(realAgent, npm) || !isStrictlyInside(npm, nodeModules)) {
+    io.stderr.push(`refusing to purge unsafe package store path: ${storePath}`);
+    return 1;
+  }
+
+  let store: string;
+  try {
+    store = realpathSync(storePath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      io.stdout.push("✓ package store already absent");
+      return 0;
+    }
+    io.stderr.push(`refusing to purge unsafe package store path: ${storePath}`);
+    return 1;
+  }
+  if (!isStrictlyInside(nodeModules, store) || path.basename(storePath) !== "pi-rules-md") {
     io.stderr.push(`refusing to purge unsafe package store path: ${storePath}`);
     return 1;
   }

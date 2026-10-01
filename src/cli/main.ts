@@ -89,6 +89,10 @@ export async function runCli(args: string[], io: CliIO, flows: CliFlows = defaul
 			return 0;
 		}
 		const agentDir = values["agent-dir"] ?? io.env.PI_RULES_AGENT_DIR;
+		if (agentDir !== undefined && agentDir.trim() === "") {
+			io.stderr.push(`error: --agent-dir requires a non-empty path\n${USAGE}`);
+			return 2;
+		}
 		options = {
 			...(agentDir === undefined ? {} : { agentDir }),
 			local: values.local === true,

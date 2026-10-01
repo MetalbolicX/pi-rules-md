@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { updateFlow } from "./update.ts";
 import type { CliIO, FlowOptions } from "./main.ts";
 
@@ -47,6 +47,15 @@ describe("updateFlow", () => {
     expect(await updateFlow(f.options)).toBe(0);
     expect(f.io.stdout.join("\n")).toContain("personal: ../local-package tracks the working tree (not updated)");
     expect(await records(f.record)).toEqual([]);
+  });
+
+  test("writes fallback output to the console when no io is supplied", async () => {
+    const f = await fixture();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await updateFlow({ agentDir: f.agentDir, dryRun: false })).toBe(0);
+      expect(log).toHaveBeenCalledWith("nothing to update (no pi-rules-md entries found)");
+    } finally { log.mockRestore(); }
   });
 
   test("reports pinned npm entries without updating", async () => {

@@ -8,7 +8,7 @@ import { runPi } from "./pi-runner.js";
 import { loadSettings } from "./settings.js";
 
 function ioFor(options: FlowOptions): CliIO {
-  return options.io ?? { env: process.env, stdout: [], stderr: [] };
+  return options.io ?? { env: process.env, stdout: { push: (...lines: string[]) => console.log(...lines) } as unknown as string[], stderr: { push: (...lines: string[]) => console.error(...lines) } as unknown as string[] };
 }
 
 function settingsProblem(settings: { readError?: string; parseError?: string; shapeError?: string }): string | undefined {

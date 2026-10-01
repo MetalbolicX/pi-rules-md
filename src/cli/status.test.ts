@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { readPackageVersion, statusFlow } from "./status.ts";
 import type { CliIO, FlowOptions } from "./main.ts";
 
@@ -60,6 +60,15 @@ describe("statusFlow", () => {
       expect(f.io.stdout).toContain("personal: npm:pi-rules-md (npm, installed 0.1.0)");
       expect(f.io.stdout).toContain("project: ../../local-package (local, installed 0.2.0)");
     } finally { process.chdir(oldCwd); }
+  });
+
+  test("writes fallback output to the console when no io is supplied", async () => {
+    const f = await fixture(["npm:another-package"]);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await statusFlow({ agentDir: f.agentDir, dryRun: false })).toBe(0);
+      expect(log).toHaveBeenCalledWith("pi-rules-md not installed");
+    } finally { log.mockRestore(); }
   });
 
   test("reports no matching installation", async () => {

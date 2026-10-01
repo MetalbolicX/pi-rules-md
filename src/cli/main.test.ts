@@ -12,6 +12,13 @@ describe("runCli argument handling", () => {
 		expect(output.stderr.join("\n")).toMatch(/Usage:.*pi-rules/s);
 	});
 
+	test("rejects an empty --agent-dir with a usage error", async () => {
+		const output = io();
+		await expect(runCli(["status", "--agent-dir", ""], output)).resolves.toBe(2);
+		expect(output.stderr.join("\n")).toContain("error: --agent-dir requires a non-empty path");
+		expect(output.stderr.join("\n")).toMatch(/Usage:.*pi-rules/s);
+	});
+
 	test("--help exits 0 and lists pi-rules commands", async () => {
 		const output = io();
 		await expect(runCli(["--help"], output)).resolves.toBe(0);

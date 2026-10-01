@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { doctorFlow, checkNodeVersion, MIN_NODE_VERSION, DIST_FILES } from "./doctor.ts";
 import type { CliIO, FlowOptions } from "./main.ts";
 import { resolveNpmStorePath } from "./paths.ts";
@@ -66,6 +66,15 @@ describe("checkNodeVersion", () => {
 });
 
 describe("doctorFlow", () => {
+  test("writes fallback output to the console when no io is supplied", async () => {
+    const f = await fixture();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await doctorFlow({ agentDir: f.agentDir, dryRun: false, fetchImpl: offlineFetch })).toBe(1);
+      expect(log).toHaveBeenCalledWith("summary: 1 structural issue(s)");
+    } finally { log.mockRestore(); }
+  });
+
   test("reports a healthy npm installation with both distribution files", async () => {
     const f = await fixture(["npm:pi-rules-md"]);
     await writePackage(storeFor(f.agentDir));

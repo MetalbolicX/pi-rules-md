@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { uninstallFlow } from "./uninstall.ts";
 import type { CliIO, FlowOptions } from "./main.ts";
 
@@ -48,11 +48,35 @@ describe("uninstallFlow", () => {
     expect(f.io.stdout).toContain("✓ pi-rules-md not installed");
   });
 
+  test("writes fallback output to the console when no io is supplied", async () => {
+    const f = await fixture(["npm:other"]);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await uninstallFlow({ agentDir: f.agentDir, dryRun: false })).toBe(0);
+      expect(log).toHaveBeenCalledWith("✓ pi-rules-md not installed");
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
+
   test("warns about unmatched local entries and never removes them", async () => {
     const f = await fixture(["./missing-package"]);
     expect(await uninstallFlow(f.options)).toBe(0);
     expect(f.io.stderr).toContain("warning: local entry does not look like pi-rules-md, leaving it: ./missing-package");
     expect(await records(f.record)).toEqual([]);
+  });
+
+  test("refuses an escaping npm symlink even when its package store is absent", async () => {
+    const f = await fixture();
+    const outside = path.join(f.root, "outside");
+    await mkdir(path.join(outside, "node_modules"), { recursive: true });
+    await symlink(outside, path.join(f.agentDir, "npm"));
+    f.options.purge = true;
+    expect(await uninstallFlow(f.options)).toBe(1);
+    expect(f.io.stderr.join("\n")).toContain("refusing to purge unsafe package store path:");
   });
 
   test("refuses to purge a store resolved outside the agent directory", async () => {
@@ -64,6 +88,13 @@ describe("uninstallFlow", () => {
     expect(await uninstallFlow(f.options)).toBe(1);
     expect(f.io.stderr.join("\n")).toContain("refusing to purge unsafe package store path:");
     expect(await records(f.record)).toEqual(["remove npm:pi-rules-md"]);
+  });
+
+  test("treats a missing personal store as an already-absent no-op", async () => {
+    const f = await fixture();
+    f.options.purge = true;
+    expect(await uninstallFlow(f.options)).toBe(0);
+    expect(f.io.stdout.join("\n")).toContain("✓ package store already absent");
   });
 
   test("purges the guarded personal store after removals", async () => {

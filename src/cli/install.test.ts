@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { installFlow } from "./install.ts";
 import type { CliIO, FlowOptions } from "./main.ts";
 
@@ -70,6 +70,15 @@ describe("installFlow", () => {
     const f = await fixture(["npm:pi-rules-md"]);
     expect(await installFlow(f.options)).toBe(0);
     expect(f.io.stdout.join("\n")).toContain("✓ Installed pi-rules-md (npm:pi-rules-md), removed 1 stale entry\ntip: Run pi-rules doctor");
+  });
+
+  test("writes fallback output to the console when no io is supplied", async () => {
+    const f = await fixture();
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await installFlow({ agentDir: f.agentDir, dryRun: true })).toBe(0);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("[dry-run] Would run: pi install npm:pi-rules-md"));
+    } finally { log.mockRestore(); }
   });
 
   test("reports installation without stale-entry count", async () => {
