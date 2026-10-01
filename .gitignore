@@ -4,5 +4,9 @@ dist/
 # Local Pi runtime state
 .atl/
 
+# Local codegraph tooling index
+codegraph/
+.codegraph/
+
 # Local scratch verification scripts
 odd/scratch-*.mjs
