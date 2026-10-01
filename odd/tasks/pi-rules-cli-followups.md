@@ -19,10 +19,13 @@ Fix or disposition every deferred item from the pi-rules-cli feature: allowBuild
 
 ODD. F2+F3 delegated to one gentle-ai-worker pass (same area, bounded surfaces `src/cli/main.ts`, `src/cli/install.ts`, `src/cli/uninstall.ts`, `src/cli/update.ts`, `src/cli/status.ts`, `src/cli/doctor.ts` + colocated tests; registry.ts/match.ts read-only unless a disposition demands a comment). Strict TDD for every behavior change. Independent verification per work unit; native review before each code commit (fresh lineage; honest-fallback policy only if the facade bug blocks again). F1/F4 parent-inline. All commits on `feat/pi-rules-cli`.
 
-## User gates (remaining)
+## User gates executed (2026-09-30)
 
-1. F4: review/fill the upstream report draft, then file (user action; no remote here).
-2. (Carried over) npm publish + dogfood switch — unchanged.
+- Gate 4 merge: `feat/pi-rules-cli` ff-merged into `main` @ `dce45ea` (+2345/−6, 37 files).
+- Gate 1 publish: name was placeholder-claimed by the user (`0.0.0-stage`, 333 B); real **pi-rules-md@0.1.0 published** from user's terminal (agent session had stale ~/.npmrc stub token, E401). Verified live: 72 files / 787 kB, bin wired, `latest` = 0.1.0.
+- Gate 2 dogfood switch: `pi-rules uninstall` removed local-path entry (`../../Documents/pi-rules-md`, exit 0) → `npx --yes pi-rules-md@0.1.0 install` from ~ installed npm:pi-rules-md via pi (added 5 packages = extension + 4 runtime deps, exit 0) → `doctor`: `personal: npm:pi-rules-md (npm, installed 0.1.0)`, `latest: 0.1.0`, `summary: healthy`. User `/reload`s live sessions.
+- Observation: pi's own node_modules reports 1 moderate audit finding (pre-existing, agent-dir tree, not this package).
+
 
 ## Results
 
