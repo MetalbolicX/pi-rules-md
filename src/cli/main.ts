@@ -1,6 +1,8 @@
 import { parseArgs } from "node:util";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { installFlow } from "./install.js";
+import { uninstallFlow } from "./uninstall.js";
 
 export const USAGE = `Usage: pi-rules <command> [options]
 
@@ -29,6 +31,7 @@ export interface FlowOptions {
 	local?: boolean;
 	purge?: boolean;
 	dryRun: boolean;
+	io?: CliIO;
 }
 
 export type CliFlows = Record<"install" | "uninstall" | "update" | "status" | "doctor", (options: FlowOptions) => number | Promise<number>>;
@@ -44,8 +47,8 @@ const notImplemented = (name: string) => async (_options: FlowOptions): Promise<
 	throw new NotImplementedFlowError(name);
 };
 const defaultFlows: CliFlows = {
-	install: notImplemented("install"),
-	uninstall: notImplemented("uninstall"),
+	install: installFlow,
+	uninstall: uninstallFlow,
 	update: notImplemented("update"),
 	status: notImplemented("status"),
 	doctor: notImplemented("doctor"),
@@ -96,7 +99,7 @@ export async function runCli(args: string[], io: CliIO, flows: CliFlows = defaul
 		return 2;
 	}
 	try {
-		return await flows[command as keyof CliFlows](options);
+		return await flows[command as keyof CliFlows]({ ...options, io });
 	} catch (error) {
 		if (error instanceof NotImplementedFlowError) {
 			io.stderr.push(`error: ${error.message} in this build; it lands in an upcoming release.\n${USAGE}`);

@@ -76,4 +76,11 @@ describe("findMatchingEntries", () => {
     expect(result.matches).toEqual([]);
     expect(result.unmatchedLocal).toHaveLength(2);
   });
+
+  test("does not match an invalid semver pin", async () => {
+    const invalidPin = entry("npm:pi-rules-md@abc");
+    const result = await findMatchingEntries([invalidPin], { settingsDir: "/fixture/settings" });
+    expect(result.matches).toEqual([]);
+    expect(result.unmatchedLocal).toEqual([]);
+  });
 });
