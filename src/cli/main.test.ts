@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { runCli } from "./main.ts";
+import { NotImplementedFlowError, runCli } from "./main.ts";
 
 function io(env: NodeJS.ProcessEnv = {}) {
 	return { env, stdout: [] as string[], stderr: [] as string[] };
@@ -49,10 +49,19 @@ describe("runCli argument handling", () => {
 });
 
 describe("runCli unimplemented flows degrade gracefully", () => {
-	test("known command without an implemented flow exits 2 with a clear message, not a crash", async () => {
+	test("an injected unimplemented flow exits 2 with a clear message, not a crash", async () => {
 		const output = io();
-		await expect(runCli(["status"], output)).resolves.toBe(2);
-		expect(output.stderr.join("\n")).toMatch(/status flow not implemented/);
+		const flows = {
+			install: async () => 0,
+			uninstall: async () => 0,
+			update: async () => 0,
+			status: async () => 0,
+			doctor: async () => {
+				throw new NotImplementedFlowError("doctor");
+			},
+		};
+		await expect(runCli(["doctor"], output, flows)).resolves.toBe(2);
+		expect(output.stderr.join("\n")).toMatch(/doctor flow not implemented/);
 		expect(output.stderr.join("\n")).toMatch(/Usage:.*pi-rules/s);
 	});
 

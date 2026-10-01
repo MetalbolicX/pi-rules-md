@@ -3,6 +3,8 @@ import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { installFlow } from "./install.js";
 import { uninstallFlow } from "./uninstall.js";
+import { updateFlow } from "./update.js";
+import { statusFlow } from "./status.js";
 
 export const USAGE = `Usage: pi-rules <command> [options]
 
@@ -32,6 +34,7 @@ export interface FlowOptions {
 	purge?: boolean;
 	dryRun: boolean;
 	io?: CliIO;
+	fetchImpl?: typeof fetch;
 }
 
 export type CliFlows = Record<"install" | "uninstall" | "update" | "status" | "doctor", (options: FlowOptions) => number | Promise<number>>;
@@ -49,8 +52,8 @@ const notImplemented = (name: string) => async (_options: FlowOptions): Promise<
 const defaultFlows: CliFlows = {
 	install: installFlow,
 	uninstall: uninstallFlow,
-	update: notImplemented("update"),
-	status: notImplemented("status"),
+	update: updateFlow,
+	status: statusFlow,
 	doctor: notImplemented("doctor"),
 };
 
