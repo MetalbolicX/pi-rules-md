@@ -49,7 +49,7 @@ Out of scope: extension behavior changes (index.ts/src/shell beyond build wiring
 - [x] **T3 — install/uninstall/purge + runtime interlock.** RED (order matters): (1) interlock test per decision 5; (2) `install.test.ts` (dedupe-first argv order, abort-on-first-failure, `--local`, success message + doctor tip, settings-error → skip dedupe); (3) `uninstall.test.ts` (multi-entry continue-after-failure, zero-match, unmatched-local warning, purge guard refusal, `--purge` after removals, project-scope no-purge). GREEN: `src/cli/{install,uninstall}.ts`. Commit: `feat(cli): install uninstall and purge with sandbox interlock`.
 - [x] **T4 — registry + update + status.** RED: `registry.test.ts` (injectable fetch, timeout incl. body read, non-OK/malformed → null, pattern gate, semver compare, fail-closed), `update.test.ts` (local → tracks-working-tree, pinned → hint, unpinned → `pi update` dispatch, dedupe key), `status.test.ts` (store version read-back, local version, latest + stale lines, both scopes). GREEN: `src/cli/{registry,update,status}.ts`. Commit: `feat(cli): registry probe, update and status`.
 - [x] **T5 — doctor.** RED: `doctor.test.ts` (per-scope health, duplicate detection, dist presence store+local, node engine, registry advice, `summary: healthy` vs `N structural issues`, exit 1 iff structural). GREEN: `src/cli/doctor.ts`. Commit: `feat(cli): doctor and advisory pipeline`.
-- [ ] **T6 — Packaging contract + README + publish prep.** RED: `packaging.test.ts` (contract: `bin.pi-rules === dist/cli.mjs`, files include dist + current set, engines, prepublishOnly chain, manifest points at `./dist/extension.js`). GREEN: apply `package.json`/README changes (`## Install`: `npx pi-rules-md install`, subcommand table, local dev `pi --extension ./index.ts`, local-path note "build first"). Gate extra: `npm pack --dry-run` file list review. Commit: `docs(cli): packaging contract, readme install and cli guide`.
+- [x] **T6 — Packaging contract + README + publish prep.** RED: `packaging.test.ts` (contract: `bin.pi-rules === dist/cli.mjs`, files include dist + current set, engines, prepublishOnly chain, manifest points at `./dist/extension.js`). GREEN: apply `package.json`/README changes (`## Install`: `npx pi-rules-md install`, subcommand table, local dev `pi --extension ./index.ts`, local-path note "build first"). Gate extra: `npm pack --dry-run` file list review. Commit: `docs(cli): packaging contract, readme install and cli guide`.
 
 ## User gates (explicit authorization required)
 
@@ -66,6 +66,10 @@ Out of scope: extension behavior changes (index.ts/src/shell beyond build wiring
 - Native review lineage `review-f09099165ae6fa35` (tier high, 332 lines, budget 166): 4/4 lenses admitted (risk+resilience via single capture; readability+reliability via capture_group after intermittent single-slot rejections — provider bug, Engram topic rdd/correction-plan-route-blocked).
 - Findings: R3-001 + R4-001 CRITICAL (deterministic, introduced): default `notImplemented` flows throw unhandled → advertised commands crash. CORRECTED in working tree: `NotImplementedFlowError` + graceful dispatch (exit 2 + actionable stderr), red test first, 12/12 scoped, 379 total, gates green, live smoke `pi-rules status` → exit 2 + message.
 - BLOCKED: correction-plan submission (43 diff lines) rejected 3x via facade capture and 3x via native CLI (rctx2 facade-session-bound). Authority store valid; lineage state correction_required. User decision pending (retry / honest-fallback commit + fresh review on next candidate / native reroute / stop).
+## Feature status: COMPLETE (T0-T6) — pending user gates
+- Branch feat/pi-rules-cli @ 2f697e1 (9 commits over main@2f87000, all natively reviewed except the user-ordered chore ce0f341).
+- T6: contract test pins bin/files/engines/prepublishOnly/manifest/deps; manifest → ./dist/extension.js (self-contained bundle proven by isolated load); files + dist; README Install section (npx pi-rules-md install, subcommand table, flags, local dev, dual-mode). Review review-f4cee70500256697 APPROVED zero findings + burned. 462/462 tests. npm pack 72 files 196.7 kB; LICENSE present (open item resolved).
+
 ### T5 (closed — honest fallback)
 - Worker (strict TDD): RED (module-load) → GREEN 14/14 doctor + 20/20 with status; full 461/461; gates green; --help smoke 0.
 - Verifier: 7/7 PASS + LIVE doctor run against real env (detected local install ../../Documents/pi-rules-md v0.1.0, healthy, exit 0; registry unreachable → advisory only).
@@ -91,6 +95,7 @@ Out of scope: extension behavior changes (index.ts/src/shell beyond build wiring
 - COMMITTED: `b01767c` (6 files, +398).
 
 ## Open items
-
-- LICENSE file presence unverified (affects `files`/publish) — check in T6.
-- `uninstall --purge` project-scope edge (personal-store purge with zero project matches) — port as-is; add covering test (source repo lacked one).
+- USER GATES: (1) npm publish pi-rules-md@0.1.0 (prepublishOnly runs typecheck+lint+test+build); (2) dogfood switch: pi-rules uninstall (removes ../../Documents/pi-rules-md) → npx pi-rules-md install → doctor → /reload live sessions.
+- Parked review lineages (store valid): review-f09099165ae6fa35 (correction_required — plan was executed manually), review-d5212a36b9dda55c (reviewing — capture route dead). Upstream facade report: capture-correction-plan rctx rejection + capture-binding rejection flakiness (obs 7170/7185 + this session).
+- WARNING advisories parked as later work: T2 match.ts:75; T3 interlock.ts:2 + uninstall.ts:22-24; T4 registry.ts:47 + update.ts:34-35.
+- pnpm-workspace.yaml unfilled allowBuilds scaffold (pre-existing, committed at 831d563): fresh pnpm install hard-fails; fix = explicit false for @google/genai, esbuild, protobufjs (pi-agent-skills parity).
