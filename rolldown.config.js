@@ -7,7 +7,9 @@ export default [
 			format: "esm",
 			minify: false,
 		},
-		external: [/^node:/],
+		// typebox is host-provided by Pi (peerDependency): never bundle it into the
+		// extension, or a physical copy bypasses Pi's module mapping and duplicates runtime modules.
+		external: [/^node:/, /^typebox$/],
 	},
 	{
 		input: "src/cli/main.ts",

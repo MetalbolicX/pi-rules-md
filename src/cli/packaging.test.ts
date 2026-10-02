@@ -9,6 +9,7 @@ type PackageManifest = {
   scripts: { prepublishOnly: string };
   pi: { extensions: string[] };
   dependencies: Record<string, string>;
+  peerDependencies: Record<string, string>;
 };
 
 async function readPackageManifest(): Promise<PackageManifest> {
@@ -37,11 +38,14 @@ describe("npm packaging contract", () => {
       "pnpm build",
     ]));
     expect(manifest.pi.extensions).toEqual(["./dist/extension.js"]);
+    // Pi provides typebox to extensions at runtime: it must ship as a "*" peer
+    // (never a dependency or bundled copy) or Pi warns about duplicate modules.
+    expect(manifest.peerDependencies).toEqual({ typebox: "*" });
     expect(manifest.dependencies).toEqual(expect.objectContaining({
       picomatch: expect.any(String),
       tinyglobby: expect.any(String),
-      typebox: expect.any(String),
       yaml: expect.any(String),
     }));
+    expect(manifest.dependencies.typebox).toBeUndefined();
   });
 });
