@@ -37,6 +37,13 @@ describe("runCli argument handling", () => {
 		expect(output.stderr.join("\n")).toMatch(/Usage:.*pi-rules/s);
 	});
 
+	test.each(["constructor", "toString", "hasOwnProperty", "__proto__"])("inherited object key %s is an unknown command", async (command) => {
+		const output = io();
+		await expect(runCli([command], output)).resolves.toBe(2);
+		expect(output.stdout).toEqual([]);
+		expect(output.stderr.join("\n")).toMatch(/Usage:.*pi-rules/s);
+	});
+
 	test("threads PI_RULES_AGENT_DIR to the selected flow", async () => {
 		const output = io({ PI_RULES_AGENT_DIR: "/sandbox/agent" });
 		let received: { agentDir?: string } | undefined;

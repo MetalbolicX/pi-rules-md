@@ -65,7 +65,8 @@ export async function runCli(args: string[], io: CliIO, flows: CliFlows = defaul
 		io.stderr.push(USAGE);
 		return 2;
 	}
-	if (!(command in defaultFlows)) {
+	// Own keys only: `in` also accepts inherited names such as `constructor`.
+	if (!Object.hasOwn(defaultFlows, command)) {
 		io.stderr.push(USAGE);
 		return 2;
 	}
