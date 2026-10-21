@@ -371,15 +371,14 @@ The wrapper invokes the `pi` CLI for package changes; it never edits
 | `pi-rules status` | Show installation status and available updates. |
 | `pi-rules doctor` | Diagnose installation health. |
 | `pi-rules lint [dir...]` | Validate rule files and print one line per error. |
+| `pi-rules new <name> [--global]` | Scaffold a valid rule file; never overwrites one. |
+| `pi-rules explain <path>` | Explain which rules a path would activate, and why. |
 
 Common options: `--local` uses project scope for install, uninstall, and
-update; `--purge` removes the package directory during uninstall; `--dry-run`
-prints actions without changing anything; `--agent-dir <dir>` selects a Pi
-agent directory (for `lint` it also moves the global rules root).
-
-The rule-authoring commands `pi-rules new` and `pi-rules explain` are not here
-yet: they land with the next slice, and this table will list them then. Their
-absence is pending work, not an oversight.
+update; `--purge` removes the package directory during uninstall; `--global`
+scaffolds a global rule with `new`; `--dry-run` prints actions without changing
+anything; `--agent-dir <dir>` selects a Pi agent directory (for `lint`,
+`new --global` and `explain` it also moves the global rules root).
 
 For local development, load the source directly:
 
@@ -423,6 +422,65 @@ ignores non-markdown files, and never follows symlinks.
 - A file that cannot be read is reported as a `read-failure` error line
 rather than aborting the run.
 
+## Scaffolding a rule
+
+`pi-rules new <name> [--global]` writes a starter rule file you can edit
+instead of remembering the frontmatter contract:
+
+```sh
+pi-rules new use-tabs              # .pi/rules/use-tabs.md
+pi-rules new shared-baseline --global   # ~/.pi/agent/rules/shared-baseline.md
+```
+
+The generated rule is valid by construction: `description` derived from the
+name, `version: 1`, one placeholder `globs` pattern with `match: touched`, and
+the documented defaults (`priority: 0`, `enforcement: inform`, `load: pinned`)
+spelled out, above a placeholder body. `pi-rules lint` accepts it and
+`pi-rules explain` explains it as soon as it exists.
+
+- The target rules directory is created when it is missing.
+- An existing rule file is **never** overwritten: the write itself is an
+exclusive create, so the command refuses, names the file, and exits `1` with
+the file untouched.
+- `<name>` is a file stem, not a path: no path separators, no whitespace, no
+leading dot. A single trailing `.md` is stripped (`new use-tabs.md` still
+writes `use-tabs.md`).
+- It prints one line, `created <file>`, naming the absolute path written.
+
+## Explaining a path
+
+`pi-rules explain <path>` prints the same report as `/rules why <path>`, from
+the command line and outside any session:
+
+```sh
+pi-rules explain src/app.ts
+```
+
+```text
+why src/app.ts (treated as touched this session):
+always: always active (path-independent)
+docs: not activated by this path (no touched path matches globs: docs/**)
+tabs: would activate — glob `src/**/*.ts`
+  also requires tools: edit
+```
+
+Rules are listed in discovery order, one group of lines each. A path is read on
+the working-directory scale that touched paths use, so an absolute path inside
+the working directory is converted to its relative form first.
+
+It answers the **path-condition** question only. There is no session, so
+tools/model/branch conditions appear as caveats of a path decision and are
+never evaluated; muting, budgets and injected sections do not apply. The read
+set is `lint`'s default pair — `<cwd>/.pi/rules` and the global rules
+directory — with native rule files only: ancestor and nested `.pi/rules`
+directories and imported formats (`.github/instructions`, `.claude/rules`) are
+not part of the report. Rule files that fail to parse are reported on stderr
+as `<file>: <code>: <message>` and never change the exit code.
+
+Exit codes: `0` for a completed report, including a path that matches no rule
+(the report says why), `1` when the rules could not be read at all, `2` for a
+usage error.
+
 ## Commands
 
 - `/rules` — report of the last evaluation: active rules with reasons,
@@ -433,7 +491,8 @@ rather than aborting the run.
 - `/rules show <id>` — one rule's path, source, configured conditions, load,
   enforcement, and body.
 - `/rules why <path>` — which rules a given path would activate and why
-  (read-only; non-path conditions appear as caveats).
+  (read-only; non-path conditions appear as caveats). The same report is
+  available outside a session as `pi-rules explain <path>`.
 - `/rules mute <id>` / `/rules unmute <id>` — exclude or re-include one rule
   for the current session. A muted rule reports
   `inactive: <id> (muted for this session)` and stays out of the injected

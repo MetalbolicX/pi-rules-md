@@ -22,8 +22,10 @@ describe("runCli argument handling", () => {
 	test("--help exits 0 and lists pi-rules commands", async () => {
 		const output = io();
 		await expect(runCli(["--help"], output)).resolves.toBe(0);
-		expect(output.stdout.join("\n")).toMatch(/install.*uninstall.*update.*status.*doctor/s);
-		expect(output.stdout.join("\n")).toMatch(/lint/);
+		// Every command in one table, install first and the authoring commands last.
+		expect(output.stdout.join("\n")).toMatch(/install.*uninstall.*update.*status.*doctor.*lint.*new.*explain/s);
+		expect(output.stdout.join("\n")).toMatch(/new <name>/);
+		expect(output.stdout.join("\n")).toMatch(/explain <path>/);
 	});
 
 	test("no args prints usage and exits 2", async () => {
@@ -58,6 +60,8 @@ describe("runCli argument handling", () => {
 			status: async () => 0,
 			doctor: async () => 0,
 			lint: async () => 0,
+			new: async () => 0,
+			explain: async () => 0,
 		};
 		await expect(runCli(["install"], output, flows)).resolves.toBe(0);
 		expect(received?.agentDir).toBe("/sandbox/agent");
@@ -85,6 +89,8 @@ describe("runCli lint dispatch", () => {
 				received = options.dirs;
 				return 1;
 			},
+			new: async () => 0,
+			explain: async () => 0,
 		};
 		await expect(runCli(["lint", "rules-a", "rules-b"], output, flows)).resolves.toBe(1);
 		expect(received).toEqual(["rules-a", "rules-b"]);
@@ -103,6 +109,8 @@ describe("runCli lint dispatch", () => {
 				received = options.dirs;
 				return 0;
 			},
+			new: async () => 0,
+			explain: async () => 0,
 		};
 		await expect(runCli(["lint"], output, flows)).resolves.toBe(0);
 		expect(received).toEqual([]);
@@ -112,6 +120,135 @@ describe("runCli lint dispatch", () => {
 		const output = io();
 		await expect(runCli(["status", "extra"], output)).resolves.toBe(2);
 		expect(output.stderr.join("\n")).toMatch(/Usage:.*pi-rules/s);
+	});
+});
+
+describe("runCli new/explain dispatch", () => {
+	test("new --help prints the new help, not the generic usage", async () => {
+		const output = io();
+		await expect(runCli(["new", "--help"], output)).resolves.toBe(0);
+		expect(output.stdout.join("\n")).toContain("Usage: pi-rules new <name> [--global]");
+		expect(output.stdout.join("\n")).toContain("NEVER overwritten");
+	});
+
+	test("explain --help prints the explain help, not the generic usage", async () => {
+		const output = io();
+		await expect(runCli(["explain", "--help"], output)).resolves.toBe(0);
+		expect(output.stdout.join("\n")).toContain("Usage: pi-rules explain <path>");
+		expect(output.stdout.join("\n")).toContain("path-condition");
+	});
+
+	test("new forwards the rule name and the --global flag", async () => {
+		const output = io();
+		let received: { name?: string; global?: boolean } | undefined;
+		const flows = {
+			install: async () => 0,
+			uninstall: async () => 0,
+			update: async () => 0,
+			status: async () => 0,
+			doctor: async () => 0,
+			lint: async () => 0,
+			new: async (options: { name?: string; global?: boolean }) => {
+				received = options;
+				return 0;
+			},
+			explain: async () => 0,
+		};
+		await expect(runCli(["new", "use-tabs", "--global"], output, flows)).resolves.toBe(0);
+		expect(received?.name).toBe("use-tabs");
+		expect(received?.global).toBe(true);
+	});
+
+	test("new without --global forwards global: false", async () => {
+		const output = io();
+		let received: { global?: boolean } | undefined;
+		const flows = {
+			install: async () => 0,
+			uninstall: async () => 0,
+			update: async () => 0,
+			status: async () => 0,
+			doctor: async () => 0,
+			lint: async () => 0,
+			new: async (options: { global?: boolean }) => {
+				received = options;
+				return 0;
+			},
+			explain: async () => 0,
+		};
+		await expect(runCli(["new", "use-tabs"], output, flows)).resolves.toBe(0);
+		expect(received?.global).toBe(false);
+	});
+
+	test("explain forwards the path", async () => {
+		const output = io();
+		let received: string | undefined;
+		const flows = {
+			install: async () => 0,
+			uninstall: async () => 0,
+			update: async () => 0,
+			status: async () => 0,
+			doctor: async () => 0,
+			lint: async () => 0,
+			new: async () => 0,
+			explain: async (options: { path?: string }) => {
+				received = options.path;
+				return 0;
+			},
+		};
+		await expect(runCli(["explain", "src/app.ts"], output, flows)).resolves.toBe(0);
+		expect(received).toBe("src/app.ts");
+	});
+
+	test.each([["new"], ["explain"]])("%s without its argument is a usage error (exit 2)", async (command: string) => {
+		const output = io();
+		let called = false;
+		const flows = {
+			install: async () => 0,
+			uninstall: async () => 0,
+			update: async () => 0,
+			status: async () => 0,
+			doctor: async () => 0,
+			lint: async () => 0,
+			new: async () => {
+				called = true;
+				return 0;
+			},
+			explain: async () => {
+				called = true;
+				return 0;
+			},
+		};
+		await expect(runCli([command], output, flows)).resolves.toBe(2);
+		expect(called).toBe(false);
+		expect(output.stdout).toEqual([]);
+		expect(output.stderr.join("\n")).toMatch(/Usage: pi-rules (new <name> \[--global\]|explain <path>)/);
+	});
+
+	test.each([
+		["new", "a", "b"],
+		["explain", "a", "b"],
+	])("%s rejects a second positional argument", async (command: string, first: string, second: string) => {
+		const output = io();
+		await expect(runCli([command, first, second], output)).resolves.toBe(2);
+		expect(output.stdout).toEqual([]);
+		expect(output.stderr.join("\n")).toContain("exactly one");
+	});
+
+	test("--global is only accepted by new", async () => {
+		const output = io();
+		await expect(runCli(["lint", "--global"], output)).resolves.toBe(2);
+		expect(output.stderr.join("\n")).toMatch(/Usage:.*pi-rules/s);
+	});
+
+	test("lint still rejects an unknown flag", async () => {
+		const output = io();
+		await expect(runCli(["lint", "--bogus"], output)).resolves.toBe(2);
+	});
+
+	test("an unknown flag on new answers with the new usage", async () => {
+		const output = io();
+		await expect(runCli(["new", "use-tabs", "--bogus"], output)).resolves.toBe(2);
+		expect(output.stderr.join("\n")).toContain("Usage: pi-rules new <name>");
 	});
 });
 
@@ -127,6 +264,8 @@ describe("runCli unimplemented flows degrade gracefully", () => {
 				throw new NotImplementedFlowError("doctor");
 			},
 			lint: async () => 0,
+			new: async () => 0,
+			explain: async () => 0,
 		};
 		await expect(runCli(["doctor"], output, flows)).resolves.toBe(2);
 		expect(output.stderr.join("\n")).toMatch(/doctor flow not implemented/);
@@ -144,6 +283,8 @@ describe("runCli unimplemented flows degrade gracefully", () => {
 			},
 			doctor: async () => 0,
 			lint: async () => 0,
+			new: async () => 0,
+			explain: async () => 0,
 		};
 		await expect(runCli(["status"], output, flows)).rejects.toThrow("boom");
 	});
