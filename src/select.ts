@@ -7,11 +7,14 @@
  *
  * 1. `dedupeByContent` — equal content keeps higher priority, then later
  *    discovery index; losers drop with cause "duplicate".
- * 2. Candidates are budgeted by priority DESC, then discovery index ASC.
+ * 2. Candidates are budgeted by priority DESC, then enforcement rank ASC
+ *    (enforce → recommend → inform, v1.2), then discovery index ASC.
+ *    Enforcement only breaks ties: it never outranks priority.
  * 3. `foldBudget` skips non-fitting candidates and continues; the first
  *    candidate is always kept if there is at least one candidate.
  * 4. Presentation order (unconditional group, priority DESC, index ASC) is
- *    applied to survivors only, after budget selection.
+ *    applied to survivors only, after budget selection. Enforcement rank is
+ *    a budget-admission key only, so rendering order is unchanged by v1.2.
  *
  * Token estimate: `estimateTokens` is ceil(chars / 4) of the rule content —
  * a deliberate approximation (~4 chars per token, no tokenizer). Budgeting
@@ -23,7 +26,7 @@
  * All functions are pure and deterministic: no I/O, no module state.
  */
 import { createHash } from "node:crypto";
-import type { DroppedRule, Rule, Selection } from "./types.ts";
+import type { DroppedRule, Enforcement, Rule, Selection } from "./types.ts";
 
 /**
  * Approximate token count of a rule's content: ceil(chars / 4). Deliberate
@@ -103,14 +106,32 @@ export const foldBudget = (rules: readonly Rule[], budget: number): Selection =>
 };
 
 /**
- * Composed pipeline: priority/index budget order → dedupe → greedy budget
- * fill → stability presentation order. Duplicates precede budget drops.
+ * Budget-admission rank (v1.2, S6): smaller admits first. `enforce` outranks
+ * `recommend`, which outranks `inform`; the rank only breaks `priority` ties.
+ */
+export const enforcementRank = (enforcement: Enforcement): number => {
+	switch (enforcement) {
+		case "enforce":
+			return 0;
+		case "recommend":
+			return 1;
+		case "inform":
+			return 2;
+	}
+};
+
+/**
+ * Composed pipeline: priority/enforcement/index budget order → dedupe → greedy
+ * budget fill → stability presentation order. Duplicates precede budget drops.
  */
 export const selectRules = (rules: readonly Rule[], budget: number): Selection => {
 	const onDemand = rules.filter((rule) => rule.load === "on-demand");
 	const pinned = rules.filter((rule) => rule.load !== "on-demand");
 	const deduped = dedupeByContent(pinned);
-	const candidates = [...deduped.active].sort((a, b) => b.priority - a.priority || (a.index ?? 0) - (b.index ?? 0));
+	const candidates = [...deduped.active].sort((a, b) =>
+		b.priority - a.priority ||
+		enforcementRank(a.enforcement) - enforcementRank(b.enforcement) ||
+		(a.index ?? 0) - (b.index ?? 0));
 	const budgeted = foldBudget(candidates, budget);
 	return { active: sortByPriority(budgeted.active), onDemand, dropped: [...deduped.dropped, ...budgeted.dropped] };
 };

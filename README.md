@@ -90,6 +90,31 @@ Exact names such as `main` still match only themselves. Branch names contain
 Outside a git repository, on a detached HEAD, or when git fails, the session has
 no branch and a `branch` condition simply does not match — never an error.
 
+## Enforcement levels
+
+`enforcement` states how binding a rule is. It defaults to `inform`, which
+renders no extra line, so sections never gain noise from rules that do not ask
+for it.
+
+```markdown
+---
+description: Never rewrite published history.
+version: 1
+enforcement: enforce
+globs:
+  - "**/*.sh"
+---
+```
+
+- `enforce` renders `> Level: MUST` and `recommend` renders `> Level: SHOULD`,
+  directly under the rule heading (after any `Triggered by` line). The body
+  follows unchanged.
+- `inform` (the default) adds nothing.
+- In the token budget, equal-`priority` candidates are admitted by rank:
+  `enforce` before `recommend` before `inform`, with discovery order still
+  breaking equal ranks. Priority always wins over rank, and the rendered order
+  of the rules is unchanged.
+
 ## Pinned and on-demand rules
 
 Rules default to `load: pinned`: when active, their bodies are eligible for

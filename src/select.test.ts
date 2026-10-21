@@ -5,9 +5,13 @@
  * Pure behavior only: no network, no disk. Content strings are sized so the
  * ceil(chars/4) estimate yields exact token counts (4 chars per token),
  * which keeps budget boundaries readable in the assertions.
+ *
+ * v1.2 (S6) adds one budget tie-break: equal priority admits `enforce` before
+ * `recommend` before `inform`, with discovery index still deciding equal
+ * ranks. Presentation order (`sortByPriority`) is deliberately untouched.
  */
 import { describe, expect, it } from "vitest";
-import { contentHash, dedupeByContent, estimateTokens, foldBudget, selectRules, sortByPriority } from "./select.ts";
+import { contentHash, dedupeByContent, enforcementRank, estimateTokens, foldBudget, selectRules, sortByPriority } from "./select.ts";
 import { normalizedPath, ruleId } from "./types.ts";
 import type { DropCause, Rule, Selection } from "./types.ts";
 
@@ -22,7 +26,7 @@ const contentOfTokens = (tokens: number, fill = "x"): string => fill.repeat(toke
  * Builds a Rule with only the interesting fields set; the rest mirror the
  * parser's materialized defaults (same fixture policy as match.test.ts).
  */
-const ruleWith = (fields: { readonly id?: string; readonly priority?: number; readonly content?: string; readonly index?: number; readonly alwaysApply?: boolean; readonly globs?: readonly string[]; readonly tools?: readonly string[]; readonly load?: "pinned" | "on-demand" }): Rule => ({
+const ruleWith = (fields: { readonly id?: string; readonly priority?: number; readonly content?: string; readonly index?: number; readonly alwaysApply?: boolean; readonly globs?: readonly string[]; readonly tools?: readonly string[]; readonly load?: "pinned" | "on-demand"; readonly enforcement?: "enforce" | "recommend" | "inform" }): Rule => ({
 	...(fields.load === undefined ? {} : { load: fields.load }),
 	id: ruleId(fields.id ?? "test-rule"),
 	path: normalizedPath(".pi/rules/test.md"),
@@ -33,7 +37,7 @@ const ruleWith = (fields: { readonly id?: string; readonly priority?: number; re
 	...(fields.tools === undefined ? {} : { tools: fields.tools }),
 	match: "both",
 	priority: fields.priority ?? 0,
-	enforcement: "inform",
+	enforcement: fields.enforcement ?? "inform",
 	alwaysApply: fields.alwaysApply ?? false,
 	version: 1,
 	content: fields.content ?? "body",
@@ -201,6 +205,47 @@ describe("foldBudget", () => {
 		const result = foldBudget([big, over, tiny], 2);
 		expect(activeIds(result)).toEqual(["big", "tiny"]);
 		expect(droppedSummaries(result)).toEqual([{ id: "over", cause: "budget" }]);
+	});
+});
+
+describe("enforcementRank", () => {
+	it("ranks enforce before recommend before inform", () => {
+		expect(enforcementRank("enforce")).toBeLessThan(enforcementRank("recommend"));
+		expect(enforcementRank("recommend")).toBeLessThan(enforcementRank("inform"));
+	});
+});
+
+describe("selectRules — enforcement tie-break (S6)", () => {
+	it("admits enforce before recommend before inform at equal priority, even against discovery index", () => {
+		const inform = ruleWith({ id: "inform", priority: 5, index: 0, content: contentOfTokens(1, "a") });
+		const recommend = ruleWith({ id: "recommend", priority: 5, index: 1, content: contentOfTokens(1, "b"), enforcement: "recommend" });
+		const enforce = ruleWith({ id: "enforce", priority: 5, index: 2, content: contentOfTokens(1, "c"), enforcement: "enforce" });
+		const result = selectRules([inform, recommend, enforce], 2);
+		// Budget 2 = two single-token bodies: the two strongest ranks were considered first.
+		expect(droppedSummaries(result)).toEqual([{ id: "inform", cause: "budget" }]);
+	});
+
+	it("never lets enforcement rank override priority", () => {
+		const inform = ruleWith({ id: "inform", priority: 9, index: 5, content: contentOfTokens(1, "a") });
+		const enforce = ruleWith({ id: "enforce", priority: 1, index: 0, content: contentOfTokens(1, "b"), enforcement: "enforce" });
+		const result = selectRules([enforce, inform], 1);
+		expect(activeIds(result)).toEqual(["inform"]);
+		expect(droppedSummaries(result)).toEqual([{ id: "enforce", cause: "budget" }]);
+	});
+
+	it("still breaks equal-priority equal-rank ties by discovery index", () => {
+		const early = ruleWith({ id: "early", priority: 2, index: 1, content: contentOfTokens(1, "a"), enforcement: "enforce" });
+		const late = ruleWith({ id: "late", priority: 2, index: 4, content: contentOfTokens(1, "b"), enforcement: "enforce" });
+		const result = selectRules([late, early], 1);
+		expect(activeIds(result)).toEqual(["early"]);
+		expect(droppedSummaries(result)).toEqual([{ id: "late", cause: "budget" }]);
+	});
+
+	it("leaves presentation order unchanged — enforcement rank is not a display key", () => {
+		const inform = ruleWith({ id: "inform", priority: 5, index: 0, content: "one", enforcement: "inform" });
+		const recommend = ruleWith({ id: "recommend", priority: 5, index: 1, content: "two", enforcement: "recommend" });
+		const enforce = ruleWith({ id: "enforce", priority: 5, index: 2, content: "three", enforcement: "enforce" });
+		expect(activeIds(selectRules([inform, recommend, enforce], 100))).toEqual(["inform", "recommend", "enforce"]);
 	});
 });
 

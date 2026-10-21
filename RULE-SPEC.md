@@ -64,7 +64,7 @@ section when the rule is active.
 | `branch` | string | ✘ | — | Active only when the session's git branch name matches this picomatch glob pattern (§5); an exact name is the degenerate pattern. The branch is resolved per turn from `git rev-parse --abbrev-ref HEAD`. |
 | `model` | string | ✘ | — | Active only when the session model id matches this picomatch glob pattern; an exact id is the degenerate pattern (§5). |
 | `priority` | integer | ✘ | `0` | Higher wins in selection; ties keep discovery order (stable). |
-| `enforcement` | `enforce` \| `recommend` \| `inform` | ✘ | `inform` | Parsed and validated; does NOT affect selection or rendering in v1 (reserved for future emphasis). |
+| `enforcement` | `enforce` \| `recommend` \| `inform` | ✘ | `inform` | Breaks budget-admission ties at equal `priority` (`enforce` → `recommend` → `inform`) and adds a level line to the rendered entry (`> Level: MUST` / `> Level: SHOULD`); `inform` adds nothing. See §6. |
 | `load` | `pinned` \| `on-demand` | ✘ | `pinned` | Loading policy metadata; materialized by parsing and does not itself alter condition matching. |
 | `keywords` | string[] | ✘ | — | Intent-donation metadata; trimmed on parse and does not itself gate matching. When a keyword matches a whole word in the current turn prompt (case-insensitive), this rule's positive globs are donated to intent pre-loading. Empty arrays are allowed. |
 | `alwaysApply` | boolean | ✘ | `false` | When true the rule bypasses ALL condition matching (still subject to the trust gate for project rules). |
@@ -158,7 +158,9 @@ we do not parse paths from shell command strings.
   deduplicated; higher `priority` wins, and equal priorities keep the later
   discovery `index`. Losers are dropped with cause `duplicate`. This
   supersedes v1's first-occurrence-wins behavior.
-- Budget candidates are considered by `priority` DESC, then `index` ASC.
+- Budget candidates are considered by `priority` DESC, then enforcement rank
+  ASC (`enforce` → `recommend` → `inform`), then `index` ASC. Enforcement only
+  breaks `priority` ties; it never outranks a higher priority.
   Greedy fill admits each candidate that fits and skips a non-fitting rule
   while continuing to later candidates. If candidates exist, the first is
   always kept even when it exceeds the budget; this supersedes v1's stop-at-
@@ -223,7 +225,10 @@ we do not parse paths from shell command strings.
   without exactly one id prints the usage line.
 - Rendered as one `pi-rules-md` system-prompt section: `# Rules` header,
   framing line, one entry per selected pinned rule (`## <description>`), optional
-  `> Triggered by: <reasons>` when reasons exist, and `---` separators.
+  `> Triggered by: <reasons>` when reasons exist, optional
+  `> Level: MUST` / `> Level: SHOULD` for `enforce` / `recommend` (directly
+  after the trigger line, or directly after the heading when there are no
+  reasons; `inform` — the default — adds no level line), and `---` separators.
   Pinned rule bodies are injected verbatim with trailing blank-line
   normalization; the section ends with exactly one trailing newline.
 - The section is re-applied on **every** agent turn while any pinned or
@@ -258,6 +263,13 @@ we do not parse paths from shell command strings.
   matching the `model` wording.
 - The specification's own example rule used `model: sonnet`, which matched no
   real model id; it is now `model: "*sonnet*"`.
+- `enforcement` is no longer inert. It breaks budget-admission ties at equal
+  `priority` (`enforce` before `recommend` before `inform`, with discovery
+  `index` still deciding equal ranks) and adds a `> Level: MUST` (enforce) or
+  `> Level: SHOULD` (recommend) line to the rendered entry, directly after the
+  `> Triggered by` line and before the body. `inform` is the default and adds
+  nothing, so v1.1 output stays byte-identical. Presentation order is
+  unchanged: `enforcement` is a budget-admission key, not a display key.
 
 ## 7. Errors (visible via `/rules`)
 

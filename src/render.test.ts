@@ -5,6 +5,10 @@
  * Golden files under src/render.golden/ are deliberate, checked-in expected
  * outputs; tests compare renderSection output byte-exactly and never
  * regenerate them. No I/O beyond reading those goldens happens here.
+ *
+ * v1.2 (S6): `enforce` adds `> Level: MUST` and `recommend` adds
+ * `> Level: SHOULD` between the trigger line (when present) and the body;
+ * `inform` — the default — adds nothing, so the v1 goldens stay byte-identical.
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -18,7 +22,7 @@ import type { MatchReason, Rule } from "./types.ts";
  * Builds a Rule with only the interesting fields set; the rest mirror the
  * parser's materialized defaults (same fixture policy as match.test.ts).
  */
-const ruleWith = (fields: { readonly id?: string; readonly description?: string; readonly content?: string; readonly relativePath?: string; readonly load?: "pinned" | "on-demand" }): Rule => ({
+const ruleWith = (fields: { readonly id?: string; readonly description?: string; readonly content?: string; readonly relativePath?: string; readonly load?: "pinned" | "on-demand"; readonly enforcement?: "enforce" | "recommend" | "inform" }): Rule => ({
 	...(fields.relativePath === undefined ? {} : { relativePath: normalizedPath(fields.relativePath) }),
 	...(fields.load === undefined ? {} : { load: fields.load }),
 	id: ruleId(fields.id ?? "test-rule"),
@@ -27,7 +31,7 @@ const ruleWith = (fields: { readonly id?: string; readonly description?: string;
 	description: fields.description ?? "test rule",
 	match: "both",
 	priority: 0,
-	enforcement: "inform",
+	enforcement: fields.enforcement ?? "inform",
 	alwaysApply: false,
 	version: 1,
 	content: fields.content ?? "body",
@@ -126,6 +130,45 @@ describe("renderSection — on-demand reference index", () => {
 	it("omits the index section when no on-demand rule matches", () => {
 		const block = renderSection([entry(ruleWith({ id: "pinned" }))]);
 		expect(block?.content).not.toContain("Reference rules available on demand");
+	});
+});
+
+describe("renderSection — enforcement level (S6)", () => {
+	it("renders `> Level: MUST` for enforce between the trigger line and the body, exactly as the golden", () => {
+		const block = renderSection([
+			entry(ruleWith({ id: "deploy-guardrails", description: "Deploy guardrails", content: "Never run a database migration against production without a reviewed rollback plan.", enforcement: "enforce" }), [{ kind: "glob", pattern: "deploy/**" }]),
+		]);
+		expect(block?.content).toBe(golden("level-enforce.md"));
+	});
+
+	it("renders `> Level: SHOULD` for recommend directly after the heading when there are no reasons, exactly as the golden", () => {
+		const block = renderSection([
+			entry(ruleWith({ id: "commit-messages", description: "Commit messages", content: "Prefer short, imperative commit subjects that describe one logical change.", enforcement: "recommend" })),
+		]);
+		expect(block?.content).toBe(golden("level-recommend-no-reasons.md"));
+	});
+
+	it("orders each entry heading → Triggered by → Level → body", () => {
+		const block = renderSection([
+			entry(ruleWith({ id: "ordered", description: "Ordered entry", content: "BODY-LINE", enforcement: "enforce" }), [{ kind: "tool", tool: "bash" }]),
+		]);
+		const content = block?.content ?? "";
+		const heading = content.indexOf("## Ordered entry");
+		const trigger = content.indexOf("> Triggered by: tool `bash`");
+		const level = content.indexOf("> Level: MUST");
+		const body = content.indexOf("BODY-LINE");
+		expect(heading).toBeGreaterThan(-1);
+		expect(heading).toBeLessThan(trigger);
+		expect(trigger).toBeLessThan(level);
+		expect(level).toBeLessThan(body);
+	});
+
+	it("emits no level line for inform — the default — and none when the field is unset", () => {
+		const explicit = renderSection([entry(ruleWith({ id: "explicit", enforcement: "inform" }))]);
+		const fallback = renderSection([entry(ruleWith({ id: "fallback" }))]);
+		expect(explicit?.content).not.toContain("Level:");
+		expect(fallback?.content).not.toContain("Level:");
+		expect(explicit?.content).toBe(fallback?.content);
 	});
 });
 
