@@ -195,6 +195,15 @@ we do not parse paths from shell command strings.
 - In UI modes (`ctx.hasUI`: TUI/RPC), the extension maintains the status-bar
   key `pi-rules-md` as `rules: <pinned-active> · ~<estimatedTokens> tok` after
   each evaluation and clears it (undefined) when nothing is active.
+- `/rules` subcommands (v1.2): `show <id>` prints the rule's path, source,
+  configured conditions, load, enforcement, and verbatim body; an unknown id
+  answers exactly `Unknown rule: <id>`. `why <path>` explains, for that
+  cwd-relative path treated as touched, which rules would activate and why —
+  through the same `matchRule` the engine uses — with declared non-path
+  conditions (tools/model/branch) shown as caveats; always-apply and non-path
+  rules are reported as path-independent. Both are read-only and never mutate
+  session state; bare `/rules` output is unchanged; any other argument form
+  prints one usage line listing the subcommands.
 - Rendered as one `pi-rules-md` system-prompt section: `# Rules` header,
   framing line, one entry per selected pinned rule (`## <description>`), optional
   `> Triggered by: <reasons>` when reasons exist, and `---` separators.

@@ -42,6 +42,7 @@ import type { PipelineDeps } from "./shell/pipeline.ts";
 import { initialState, transition } from "./src/state.ts";
 import type { SessionState } from "./src/state.ts";
 import { sectionId } from "./src/render.ts";
+import { explainPath, renderRuleDetail } from "./src/explain.ts";
 import type { EvaluationTrace, NormalizedPath, Rule, RuleError } from "./src/types.ts";
 
 /** Handler context fields the wiring consumes (mirror of pi ExtensionContext). */
@@ -194,8 +195,26 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 
 		api.registerCommand("rules", {
 			description: "Show why each pi-rules-md rule is active or inactive",
-			handler: async (_args, ctx) => {
-				ctx.ui.notify(renderTraceReport(lastTrace, lastErrors, lastDiscoveredRules, deps.pipeline.budget).join("\n"), "info");
+			handler: async (args, ctx) => {
+				const trimmed = args.trim();
+				if (trimmed === "") {
+					ctx.ui.notify(renderTraceReport(lastTrace, lastErrors, lastDiscoveredRules, deps.pipeline.budget).join("\n"), "info");
+					return;
+				}
+				const tokens = trimmed.split(/\s+/);
+				const sub = tokens[0] ?? "";
+				const rest = tokens.slice(1);
+				if (sub === "show" && rest.length === 1) {
+					const id = rest[0] ?? "";
+					const rule = lastDiscoveredRules.find((candidate) => candidate.id === id);
+					ctx.ui.notify(rule === undefined ? `Unknown rule: ${id}` : renderRuleDetail(rule).join("\n"), "info");
+					return;
+				}
+				if (sub === "why" && rest.length >= 1) {
+					ctx.ui.notify(explainPath(lastDiscoveredRules, rest.join(" ")).join("\n"), "info");
+					return;
+				}
+				ctx.ui.notify("usage: /rules [show <id> | why <path>] — bare /rules prints the full evaluation report", "info");
 			},
 		});
 	};

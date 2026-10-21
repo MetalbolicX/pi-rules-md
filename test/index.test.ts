@@ -232,11 +232,11 @@ const emitCustomStart = async (
 	return event.systemPromptOptions.sections;
 };
 
-/** Invokes the /rules command handler and returns the joined notification. */
-const invokeRules = async (api: ReturnType<typeof fakeApi>): Promise<string> => {
+/** Invokes the /rules command handler with optional args and returns the joined notification. */
+const invokeRules = async (api: ReturnType<typeof fakeApi>, args = ""): Promise<string> => {
 	const handler = api.commands.get("rules")?.handler;
 	const { ctx, notifications } = commandCtx();
-	await handler?.("", ctx);
+	await handler?.(args, ctx);
 	return notifications.join("\n");
 };
 
@@ -401,6 +401,64 @@ describe("createRulesExtension before_agent_start cycle", () => {
 		// (pi's diff then emits nothing), not skipped and not dropped.
 		await emitStart(api, ctx, sections);
 		expect(sections["pi-rules-md"]).toBe(firstContent);
+	});
+});
+
+describe("/rules subcommands", () => {
+	it("shows a discovered rule with its metadata and verbatim body", async () => {
+		const rule = ruleWith({ id: "ts-rule", globs: ["src/**/*.ts"], alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		await emitStart(api, handlerCtx("/work"));
+
+		const out = await invokeRules(api, "show ts-rule");
+		expect(out).toContain("ts-rule");
+		expect(out).toContain("path: /work/.pi/rules/ts-rule.md");
+		expect(out).toContain("source: project");
+		expect(out).toContain("configured: files matching: src/**/*.ts");
+		expect(out).toContain("load: pinned");
+		expect(out).toContain("enforcement: inform");
+		expect(out).toContain("body of ts-rule");
+	});
+
+	it("answers Unknown rule for an id that is not discovered", async () => {
+		const { deps } = depsWith({ rules: [] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		await emitStart(api, handlerCtx("/work"));
+		expect(await invokeRules(api, "show nope")).toBe("Unknown rule: nope");
+	});
+
+	it("explains why a path would activate rules without changing session state", async () => {
+		const rule = ruleWith({ id: "ts-rule", globs: ["src/**/*.ts"], alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		const before: Record<string, string> = {};
+		await emitStart(api, ctx, before);
+
+		const out = await invokeRules(api, "why src/a.ts");
+		expect(out).toContain("ts-rule: would activate — glob `src/**/*.ts`");
+
+		// Read-only: the next cycle renders the identical section as before.
+		const after: Record<string, string> = {};
+		await emitStart(api, ctx, after);
+		expect(after["pi-rules-md"]).toBe(before["pi-rules-md"]);
+	});
+
+	it("prints a usage line for unknown subcommands and malformed arguments", async () => {
+		const { deps } = depsWith({ rules: [] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		for (const args of ["frobnicate", "show", "why"]) {
+			const out = await invokeRules(api, args);
+			expect(out).toContain("usage:");
+			expect(out).toContain("show");
+			expect(out).toContain("why");
+		}
 	});
 });
 

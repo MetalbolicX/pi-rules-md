@@ -180,6 +180,10 @@ updated with `pi-rules update`.
   errors, the injected content hash, and `budget:`/`section:` token
   visibility lines. In TUI/RPC modes a status-bar entry `pi-rules-md`
   shows `rules: <active> · ~<tokens> tok` while anything is active.
+- `/rules show <id>` — one rule's path, source, configured conditions, load,
+  enforcement, and body.
+- `/rules why <path>` — which rules a given path would activate and why
+  (read-only; non-path conditions appear as caveats).
 
 ## Trust model
 
