@@ -1,0 +1,77 @@
+# Feature: rules-v1-2-features (pi-rules-md opportunities plan)
+
+Status: **IMPLEMENTING — T0 complete; T1 in progress.** Base: `main` @ `d2fae57` + existing uncommitted pi 1.3.0 dependency bump.
+Tracker: `feat/rules-v1-2`; current child: `feat/rules-v1-2-00-sdk`. Rule format doc: **v1.2**; frontmatter `version: 1` unchanged. Runner: `pnpm test` (Vitest).
+Delivery: auto-chain / feature-branch-chain (user selected); forecast >2,000 authored lines. Slice 00: T0 only (`d2fae57` → `d11ed12`), ~130 authored changed lines excluding lockfile; future slices depend on their immediate predecessor. No PR creation authorized. Source analysis: Engram obs 11893.
+
+## Specs
+
+Decisions below quote the user's answers verbatim (Log L2). Where a spec states behavior the user did not literally write, it derives from the opportunity analysis the user accepted with "Yes, turn them into plan to implement the features" (L1).
+
+- **S0 — pi 1.3.0 baseline.** The extension typechecks and passes the full suite against `@earendil-works/pi-coding-agent` ^1.3.0. Baseline observed 2026-10-20: `pnpm test` 474/474 pass; `pnpm typecheck` exit 1 — `PiExtensionApiLike.on` overloads not assignable from the real `ExtensionAPI` (`Type '"before_agent_start"' is not assignable to type '"project_trust"'`). Structural-mirror comments citing 0.87.1 are re-verified against 1.3.0.
+- **S1 — Model matching.** User decision: "Glob on id (Recommended)" — "picomatch against the id: `*sonnet*`, `claude-opus-*`. Exact strings keep working. Spec bumps to v1.2." The RULE-SPEC example `model: sonnet` (RULE-SPEC.md:44) is corrected to a pattern that matches a real id. The mismatch reason in `/rules` names the pattern and the session id.
+- **S2 — Branch condition is live.** The session branch comes from `pi.exec("git", ["rev-parse", "--abbrev-ref", "HEAD"])`, once per `before_agent_start`. Detached HEAD (`HEAD`), non-git dirs, non-zero exit, or exec failure → branch absent (never a throw). `branch` matches as a picomatch glob on the branch name (same semantics as S1; exact names keep working).
+- **S3 — `/rules` budget visibility + status bar.** `/rules` keeps every existing line and adds one line `budget: <used>/<budget> estimated tokens` (pinned bodies) plus `section: ~<estimatedTokens> tokens` when a block exists. When `ctx.hasUI`, the extension sets status key `pi-rules-md` to `rules: <active> · ~<estimatedTokens> tok` after each cycle and clears it (`undefined`) when nothing is active.
+- **S4 — `/rules` subcommands (read-only).** `/rules show <id>` prints the rule's path, source, configured conditions, load, enforcement, and body; unknown id → `Unknown rule: <id>`. `/rules why <path>` reports, for that cwd-relative path treated as touched, which rules would activate and why (no state change). Bare `/rules` output is unchanged except S3. Unknown subcommand → usage line listing all subcommands.
+- **S5 — Session mute.** `/rules mute <id>` and `/rules unmute <id>` exclude/re-include a rule for the current session; muted rules report `inactive: <id> (muted for this session)`. Mute state resets on session switch/fork like touched paths (S7 governs persistence).
+- **S6 — `enforcement` takes effect.** Rendering: `enforce` adds the line `> Level: MUST` and `recommend` adds `> Level: SHOULD` under the heading (after `Triggered by`); `inform` (the default) adds nothing, so existing goldens stay byte-identical. Selection: budget candidate order becomes priority DESC → enforcement rank (enforce > recommend > inform) → index ASC.
+- **S7 — Touched paths survive resume.** Every newly touched path batch is appended as a session custom entry (`customType: "pi-rules-md/touched"`). On `session_start` (all reasons) and `session_tree`, touched paths are rebuilt from the current branch's entries (`ctx.sessionManager.getBranch()`), so resume/reload restores them and tree navigation drops paths from abandoned branches.
+- **S8 — Exists-scan cache.** The `exists` scan result is cached per (cwd, pattern set) and invalidated by `write`/`edit`/`bash` tool results and by a pattern-set change. Matching results are identical to an uncached scan (pinned by a differential test). No `.gitignore` semantic change: cache only (D1 resolved).
+- **S9 — Mid-run rule delivery.** User decision: "tool_result attach (Recommended)" — "Append the newly activated rule body to the read/edit/write result that triggered it. Precise, once per rule per session, no prompt-cache churn." Additional constraints: only `read`/`edit`/`write` results attach; a rule already delivered (in the current section or a previous attach) is never re-attached; attached pinned bodies respect the remaining budget (budget − current section pinned tokens) and otherwise degrade to a one-line reference to `read_rule`; on-demand rules attach only their index line; errored tool results are left untouched; the handler is total. Delivered set resets on compaction and session switch/fork. Enabled by default; `PI_RULES_ATTACH=off` disables attachment (D3 resolved).
+- **S10 — Monorepo discovery.** Project rules are discovered from every `.pi/rules` between cwd and the enclosing git root (inclusive), and from nested `**/.pi/rules` dirs below cwd (bounded depth, `.git`/`node_modules` ignored). Each rule's globs are relative to the directory owning its `.pi/` folder (its rule base); rules at `<cwd>/.pi/rules` behave exactly as today. All of them stay behind `isProjectTrusted()`; nothing outside the git root containing cwd is read.
+- **S11 — Importers.** User decision (multi-select): "Copilot .github/instructions" — "*.instructions.md with `applyTo` globs."; "Claude .claude/rules" — "Markdown rules under .claude/rules." Copilot: `.github/instructions/**/*.instructions.md`, `applyTo` comma-separated globs (`**` → always), optional `description` (fallback: file stem), other keys ignored. Claude: `.claude/rules/**/*.md`, optional `paths` (string, comma-separated string, or list; brace expansion allowed); no `paths` → always applied; description fallback: first `#` heading, else stem. Both map to `match: touched`, `load: pinned`, project source, trust-gated, lenient parse with parse errors still reported in `/rules` under their real file. Enabled by default for trusted projects; `PI_RULES_IMPORT=none` disables importers (D2 resolved).
+- **S12 — CLI authoring commands.** `pi-rules lint [dir...]` parses rule files (default: `.pi/rules` and `~/.pi/agent/rules`), prints each error as `<file>: <code>: <message>`, exits 1 on any error, 0 otherwise. `pi-rules new <name> [--global]` scaffolds a valid rule file and refuses to overwrite. `pi-rules explain <path>` prints the S4 `why` report from the CLI. Help text and README command table updated.
+- **S13 — Banked hardening.** `source-unreadable` outcomes are cached like file errors; the `at` undefined-element edge from the pi-rules-md ledger is closed with a test.
+- **Backlog (not in this plan).** User decision: "Defer (Recommended)" — tool-call guard rules. Also deferred: user-extendable intent lexicon (per-rule `keywords` already covers custom vocab); `.cursor/rules/*.mdc` importer (not selected).
+
+## Resolved decisions
+
+- **D1** — User: "2. Not yet." No `.gitignore` change; cache only.
+- **D2** — User: "3. Yes." Importers on for trusted projects; opt-out `PI_RULES_IMPORT=none`.
+- **D3** — User: "4. Yes". Attachment on; opt-out `PI_RULES_ATTACH=off`.
+
+## Tasks
+
+Route defaults: inline (Writer rule not triggered unless noted). High-risk units get their own commit, independent `gentle-ai-verify`, and native review under RDD. Strict RED→GREEN per behavior; RULE-SPEC/README updated in the same unit.
+
+| ID | Specs | Work unit | Route | Risk | Commit |
+|---|---|---|---|---|---|
+| T0 | S0 | DONE — Pi 1.3.0 mirrors fixed; RED TS2345 → GREEN 475 tests/tsc/lint; independent S0 verification MET; review approved+acknowledged | delegated (context backstop) | item 5 (dependency) | d11ed12 |
+| T1 | S1 | IN PROGRESS — Model glob predicate + mismatch reason + RULE-SPEC v1.2 example fix | delegated (context backstop) | item 3 (key semantics; exact values preserved) | — |
+| T2 | S2 | `shell/git-branch.ts` exec seam, branch glob predicate, wire into cycle | inline | none expected | — |
+| T3 | S3 | Budget lines in `/rules`, status-bar projection | inline | none | — |
+| T4 | S4 | `/rules show` / `why` / usage; shared pure `explainPath` in core | inline | none | — |
+| T5 | S5 | Mute/unmute: state field + engine exclusion + report reason | inline | none | — |
+| T6 | S6 | Enforcement label + tie-break; goldens for enforce/recommend | inline | item 3 (rendered prompt contract) | — |
+| T7 | S7 | Custom-entry persistence + branch rebuild on `session_start`/`session_tree` | inline | item 1 (writes session entries) — confirm | — |
+| T8 | S8 | Scan cache + invalidation + differential test (D1) | inline | none | — |
+| T9 | S9 | Pure core: `newlyActivated(trace, delivered)`, attachment renderer, remaining-budget math | inline | none | — |
+| T10 | S9 | Shell: `tool_result` handler, delivered set in state, toggle (D3) | inline + verify | item 3 (injection contract changes) | — |
+| T11 | S10 | Walk-up to git root + per-rule base rebasing | inline + verify | item 2 (trust boundary) | — |
+| T12 | S10 | Nested descendant `.pi/rules` discovery | inline | item 2 (trust boundary) | — |
+| T13 | S11 | Importer seam + Copilot adapter (D2) | inline | none | — |
+| T14 | S11 | Claude `.claude/rules` adapter | inline | none | — |
+| T15 | S12 | `pi-rules lint` | inline | none | — |
+| T16 | S12 | `pi-rules new` + `explain` (reuses T4 core) | inline | none | — |
+| T17 | S13 | Hardening leftovers | inline | none | — |
+| T18 | all | Docs sweep (README, RULE-SPEC v1.2 changelog), version 0.2.0 — no publish | inline | none | — |
+
+Dependencies: T0 → everything. T4 → T5, T16. T9 → T10. T11 → T12. T13 → T14. T7 before T10 (delivered set shares the state/persistence shape). Suggested order: T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18.
+
+Parallelism candidate (only if a Writer-rule reason holds at the time): {T13, T14} and {T15, T16} are independent units with disjoint surfaces (`shell/importers/**` vs `src/cli/**`).
+
+## Gates (user-owned)
+
+- Implementation and D1–D3 authorized. Existing pi 1.3.0 bump belongs to T0 on `feat/rules-v1-2`.
+- Delivery shape selected: feature/tracker branch chain; small dependent local child branches, eventual draft/no-merge tracker PR. No publishing authorization.
+- Merge, publish (0.2.0), dogfood switch: user decisions, as in prior features.
+
+## Log
+
+- **L1** (2026-10-20, user): "Analyze the source code to find any potential areas of opportunities or new features for the pi extension" → then: "Yes, turn them into plan to implement the features"
+- **L2** (2026-10-20, user answers): Mid-run rules → "tool_result attach (Recommended)"; Model matching → "Glob on id (Recommended)"; Importers → "Copilot .github/instructions", "Claude .claude/rules"; Tool guard → "Defer (Recommended)".
+- **L3** (2026-10-20, evidence): baseline `pnpm test` 474/474 pass; `pnpm typecheck` exit 1 (1 error, `PiExtensionApiLike.on` vs pi 1.3.0 `ExtensionAPI`). Format research: Claude `.claude/rules/*.md` `paths:` frontmatter (code.claude.com/docs/en/claude-md); Copilot `NAME.instructions.md` under `.github/instructions` with `applyTo` (docs.github.com).
+- **L4** (user, verbatim): "1. I authorize. 2. Not yet. 3. Yes. 4. Yes". Branch created; existing package.json/pnpm-lock.yaml changes preserved for T0. RDD status: on (default). Source writes route through a bounded worker because the runtime context backstop fired. Delivery forecast >2,000 authored lines, excluding generated lockfile; chain choice required before first commit.
+- **L5** (user choice): "Feature/tracker branch chain (recommended)" (`feature-branch-chain`). Tracker `feat/rules-v1-2`; first child `feat/rules-v1-2-00-sdk`.
+- **L6** (T0): worker reproduced baseline compile failure; per-event overloads fixed SDK assignability; absent custom-run prompt maps to empty intent. Focused 50 tests, full 475, tsc and oxlint exit 0. Independent verifier S0 MET (including baseline/current source swap), parent tsc/diff-check exit 0. Native review `review-792779f655e07d98` (medium, risk/readability/reliability) approved; exact acknowledgement burned authority. Advisory IDs `R1-dep-upgrade-supply-chain`, `R3-001` are non-blocking later work. Work-unit commit `d11ed12e65eb86b26b38499fa955a9d35895815f`. Runtime fake-API harness with isolated HOME confirmed section injection on user/custom runs. Rollback: T0's 8 changed files only. No rebuild/publish performed.
+- **L7** (discovery): isolated production-discovery probe found pre-existing `read_rule` returning `Unknown rule: python.md` because raw discovered rules lack `relativePath`; pipeline derives it later. Record as prerequisite to S9 fallback, not a T0 correction (Engram 11897). Native post-commit assessment unavailable (untracked ledger scope error); earlier risk escalation item 5 drove independent verify, and native review was completed/acknowledged before commit.
