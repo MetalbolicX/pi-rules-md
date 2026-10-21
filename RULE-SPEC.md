@@ -13,6 +13,7 @@ pipeline applies the remaining semantics.
 | Project rules (ancestors) | every `<dir>/.pi/rules/**/*.md` for each `<dir>` between the working directory's parent and the enclosing git root (inclusive) | the project is trusted |
 | Project rules (nested) | `<cwd>/<dir>/…/.pi/rules/**/*.md` for each `<dir>` below the working directory, at most 6 directory segments deep, never under `.git/` or `node_modules/` | the project is trusted |
 | Project rules (Copilot import) | `<cwd>/.github/instructions/**/*.instructions.md` | the project is trusted and importers are enabled (`PI_RULES_IMPORT` is not `none`) |
+| Project rules (Claude import) | `<cwd>/.claude/rules/**/*.md` | the project is trusted and importers are enabled (`PI_RULES_IMPORT` is not `none`) |
 | Global rules | `~/.pi/agent/rules/**/*.md` | always |
 
 The enclosing git root is resolved once per working directory from
@@ -87,30 +88,64 @@ project rule: `version: 1`, `match: touched`, `load: pinned`,
 `enforcement: inform`, `priority: 0`, `source: project`, trust-gated exactly
 like `.pi/rules`, cached by mtime exactly like any rule file, and reported in
 `/rules` under its REAL file path. Imported files are listed after the nested
-`.pi/rules` dirs and before the global dir, and join the same id namespace.
+`.pi/rules` dirs and before the global dir — Copilot's `.github/instructions`
+first, then Claude's `.claude/rules` — and join the same id namespace.
 
 | Importer | Directory | Mapping |
 | --- | --- | --- |
 | Copilot | `<cwd>/.github/instructions/**/*.instructions.md` | `applyTo` (comma-separated globs); the entry `**` means always-apply; absent `applyTo` — or no frontmatter at all — means `applyTo: **` (always); `description` optional, fallback is the file stem; every other key is ignored |
+| Claude | `<cwd>/.claude/rules/**/*.md` | `paths` optional, as one glob string, a comma-separated string, or a list of glob strings (brace expansion allowed); absent `paths` — or no frontmatter at all — means always-apply; `description` optional, fallback is the FIRST body heading, then the file stem; every other key is ignored |
 
 - **Glob scale.** An importer's globs are relative to the working directory
   (the rule base, not the importer's directory), so a Copilot
   `applyTo: src/**` matches the cwd-relative `src/**` exactly as authored — no
   prefix is prepended for the importer root.
 - **Reference path.** An imported rule is referenceable by its
-  importer-root-relative path (`typescript.instructions.md`), just as a nested
-  rule is relative to its own `.pi/rules`.
+  importer-root-relative path (`typescript.instructions.md` for Copilot,
+  `typescript.md` for Claude), just as a nested rule is relative to its own
+  `.pi/rules`.
+- **Ordering.** Both importers run in a fixed order — `.github/instructions`
+  before `.claude/rules` — after the nested `.pi/rules` dirs and before the
+  global dir. Imported ids compete in the SAME namespace as every other source,
+  so `typescript.md` in `.pi/rules`, `typescript.instructions.md` in
+  `.github/instructions` and `typescript.md` in `.claude/rules` resolve to
+  `typescript`, `typescript-2`, `typescript-3`, with a colliding global rule
+  taking `typescript-4`.
 - **Lenient parsing.** Imports do NOT use the strict native schema: unknown
   frontmatter keys are ignored (never `unknown-key` errors), the native
   `version`/`description`/activation-condition requirements do not apply, and
   the markdown body is kept verbatim (no blank-edge trimming). Only real
   document damage is an error and still surfaces in `/rules` under the real
   file: broken YAML, a non-mapping frontmatter root, an unterminated `---`
-  block, a non-string `description`, and a non-string or empty `applyTo` list.
+  block, a non-string `description`, a non-string or empty `applyTo` list, and a
+  `paths` value that is neither a string nor a list of strings (or that trims
+  down to no glob at all).
 - **`applyTo` splitting.** Entries are comma-separated, trimmed,
   empty entries dropped, and duplicates collapsed to first-seen order. Only the
   bare entry `**` is the all-matching form; `**/*.md`, `src/**` and friends stay
   ordinary touched-path globs.
+- **`paths` forms (Claude).** Claude's key is optional and accepts one glob
+  string, a comma-separated string, or a YAML list of glob strings; all three
+  normalize to the same touched-path glob list. Entries are trimmed, blank
+  entries dropped, and duplicates collapsed to first-seen order. A `paths` value
+  that ends up with NO glob (`paths: ''`, `paths: ' , '`, `paths: []`) is a
+  parse error rather than a silent always-apply. `**` is NOT special here — it
+  stays an ordinary glob that matches every touched path — and only its absence
+  means always-apply, matching Claude's own "no paths = always applied" rule.
+- **Brace expansion (Claude).** `paths: src/**/*.{ts,tsx}` reaches the glob
+  engine verbatim; picomatch expands braces natively, so no expansion happens in
+  the importer. The comma-separated form splits only on commas OUTSIDE a `{…}`
+  group, so `src/**/*.{ts,tsx}, docs/**` is exactly two globs.
+- **Negation (Claude).** Claude does not document negation; `!` entries are
+  passed through untouched and therefore behave exactly like a native rule's
+  negated glob (they subtract from the positive set). A `paths` list of ONLY
+  negations matches nothing, like every other rule.
+- **Description precedence (Claude).** An explicit non-blank `description`
+  wins; otherwise the FIRST body heading (an ATX line `#`…`######` followed by
+  whitespace, its `#` run stripped and trimmed); otherwise the file stem
+  (`typescript.md` → `typescript`). A blank explicit `description` counts as
+  absent. Headings are not parsed inside fenced code blocks: the first line that
+  looks like an ATX heading wins.
 - **Disabling.** `PI_RULES_IMPORT=none` (trimmed, case-insensitive) disables
   EVERY importer: no importer root is listed, stat-ed or read, and a repository
   without importer files behaves identically in both modes.

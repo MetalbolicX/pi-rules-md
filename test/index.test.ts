@@ -26,6 +26,7 @@ import type { PiEventShape } from "../shell/collectors.ts";
 import { globMatcher } from "../src/conditions/predicates.ts";
 import { createCachedScanner } from "../shell/scan-cache.ts";
 import { nodeDiscoveryDeps, tinyglobbyScanner } from "../shell/discovery.ts";
+import { CLAUDE_IMPORTER } from "../shell/importers/claude.ts";
 import { COPILOT_IMPORTER } from "../shell/importers/copilot.ts";
 import type { Importer } from "../shell/importers/seam.ts";
 import { createScopedScanner } from "../shell/match.ts";
@@ -1851,6 +1852,84 @@ describe("Copilot importer wiring (S11)", () => {
 
 			const sections = await emitStart(api, ctx);
 			expect(sections["pi-rules-md"]).toBeUndefined();
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
+
+/**
+ * Claude importer wiring (S11, T14): the same production composition as the
+ * Copilot tests, but reading `.claude/rules/**\/*.md`. A `paths` rule activates
+ * on a touched-path match (brace expansion included), a rule WITHOUT `paths`
+ * always applies, a parse error is visible in `/rules` under the real file, and
+ * `read_rule` resolves the file by its `.claude/rules`-relative path.
+ */
+describe("Claude importer wiring (S11)", () => {
+	it("activates a `paths` rule on a touched match (brace expansion included)", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-wiring-claude-"));
+		try {
+			await mkdir(join(root, ".claude/rules"), { recursive: true });
+			await writeFile(
+				join(root, ".claude/rules/typescript.md"),
+				"---\npaths: src/**/*.{ts,tsx}\n---\nUse explicit types.\n",
+			);
+			const { deps } = productionNestedDeps(root, [CLAUDE_IMPORTER]);
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx(normalizedPath(root));
+			const sections: Record<string, string> = {};
+
+			// Outside the brace-expanded set (and outside `src/`): nothing active.
+			await emitSignal(api, toolExecutionStart("read", join(root, "docs/guide.md")), ctx);
+			await emitStart(api, ctx, sections);
+			expect(sections["pi-rules-md"]).toBeUndefined();
+
+			await emitSignal(api, toolExecutionStart("read", join(root, "src/component.tsx")), ctx);
+			await emitStart(api, ctx, sections);
+			expect(sections["pi-rules-md"]).toContain("Use explicit types.");
+
+			// Referenceable by its `.claude/rules`-relative path.
+			const tool = api.tools.get("read_rule");
+			const fetched = await tool?.execute("tool-call", { name: "typescript.md" }, undefined, undefined, {} as never);
+			expect(fetched?.content).toEqual([{ type: "text", text: "Use explicit types.\n" }]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("activates a rule with no `paths` with no touched path at all", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-wiring-claude-always-"));
+		try {
+			await mkdir(join(root, ".claude/rules"), { recursive: true });
+			await writeFile(join(root, ".claude/rules/team.md"), "# Team conventions\n\nAlways write tests.\n");
+			const { deps } = productionNestedDeps(root, [CLAUDE_IMPORTER]);
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx(normalizedPath(root));
+
+			const sections = await emitStart(api, ctx);
+			expect(sections["pi-rules-md"]).toContain("## Team conventions");
+			expect(sections["pi-rules-md"]).toContain("Always write tests.");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reports a Claude parse error in /rules under the real file", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-wiring-claude-error-"));
+		try {
+			await mkdir(join(root, ".claude/rules"), { recursive: true });
+			const broken = join(root, ".claude/rules/broken.md");
+			await writeFile(broken, "---\npaths: 3\n---\nBody.\n");
+			const { deps } = productionNestedDeps(root, [CLAUDE_IMPORTER]);
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx(normalizedPath(root));
+
+			await emitStart(api, ctx, {});
+			const report = await invokeRules(api);
+			expect(report).toContain(`parse error: ${normalizedPath(broken)} (invalid-value)`);
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

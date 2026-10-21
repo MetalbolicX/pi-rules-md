@@ -50,6 +50,7 @@ import { piEventToStateEvents } from "./shell/collectors.ts";
 import type { PiEventShape } from "./shell/collectors.ts";
 import { discover as discoverRules, nodeDiscoveryDeps, projectRuleDirs, tinyglobbyScanner } from "./shell/discovery.ts";
 import type { DiscoveryCacheEntry, DiscoveryDeps, ProjectRuleDir } from "./shell/discovery.ts";
+import { CLAUDE_IMPORTER } from "./shell/importers/claude.ts";
 import { COPILOT_IMPORTER } from "./shell/importers/copilot.ts";
 import type { Importer } from "./shell/importers/seam.ts";
 import { applyInjection, removeInjection } from "./shell/injection.ts";
@@ -540,8 +541,15 @@ export default function piRulesMd(pi: ExtensionAPI): void {
 	// Importers (S11/D2): on for trusted projects unless `PI_RULES_IMPORT=none`.
 	// The disabled shape is an EMPTY importer list, so discovery lists no importer
 	// root and the pre-importer behavior is byte-identical even when the files
-	// exist. Claude `.claude/rules` is T14; the seam takes it as a second entry.
-	const importers: readonly Importer[] = resolveImport(process.env.PI_RULES_IMPORT) ? [COPILOT_IMPORTER] : [];
+	// exist. Ordering is the list order: Copilot's `.github/instructions` is read
+	// before Claude's `.claude/rules`, both after the nested `.pi/rules` dirs and
+	// before the global dir. Imported ids share ONE namespace with every other
+	// source (stem first, then `-2`, `-3`, …), so a `typescript.md` in
+	// `.pi/rules`, `.github/instructions` and `.claude/rules` resolves to
+	// `typescript`, `typescript-2`, `typescript-3` in that order.
+	const importers: readonly Importer[] = resolveImport(process.env.PI_RULES_IMPORT)
+		? [COPILOT_IMPORTER, CLAUDE_IMPORTER]
+		: [];
 	const deps: ExtensionDeps = {
 		pipeline: {
 			discover: createProjectDiscovery(nodeDiscoveryDeps(), gitRootOf, globalRulesDir(homedir()), importers),

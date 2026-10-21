@@ -204,14 +204,16 @@ contract, including how rebased globs are evaluated, why `/rules` may name a
 rebased pattern, and the exact ordering and depth bound, is in
 [RULE-SPEC.md §1](RULE-SPEC.md#1-file-placement-and-identity).
 
-## Importers (Copilot instructions)
+## Importers (Copilot instructions, Claude rules)
 
 Rules written for another tool are read in place — never copied, moved, or
-rewritten — so the original tool keeps working. The Copilot importer reads
-`.github/instructions/**/*.instructions.md` and turns each file into an ordinary
-project rule: it is trust-gated like `.pi/rules`, cached by mtime like any rule
-file, ordered after the nested `.pi/rules` dirs and before the global dir,
-shares the same id namespace, and appears in `/rules` under its real path.
+rewritten — so the original tool keeps working. Both importers turn each file
+into an ordinary project rule: trust-gated like `.pi/rules`, cached by mtime
+like any rule file, ordered after the nested `.pi/rules` dirs and before the
+global dir, sharing the same id namespace, and reported in `/rules` under its
+real path. Copilot's `.github/instructions` is read before Claude's
+`.claude/rules`, so on an id collision the Copilot file keeps the earlier
+suffix.
 
 ```text
 .github/instructions/typescript.instructions.md
@@ -240,6 +242,39 @@ Use explicit types.
 - Parse errors are not silent: `/rules` reports them under the real file path, so
   an invalid `applyTo` is visible where it lives.
 
+### Claude rules
+
+The Claude importer reads `.claude/rules/**/*.md` (plain markdown, `.md` only):
+
+```text
+.claude/rules/typescript.md
+---
+paths: src/**/*.{ts,tsx}, docs/**
+description: TypeScript conventions
+---
+Use explicit types.
+```
+
+- `paths` is optional and accepts three shapes: one glob string, a
+  comma-separated string, or a YAML list of glob strings. Entries are trimmed,
+  blank entries dropped, and duplicates collapsed.
+- Brace expansion works (`src/**/*.{ts,tsx}`); the comma-separated form splits
+  only on commas outside a `{…}` group, so a brace group is never cut in half.
+- An absent `paths` — or a file with no frontmatter at all — means the rule
+  always applies: that is Claude's own "no paths = always applied" default. A
+  `paths` value that trims down to no glob at all is a parse error, not a silent
+  always-apply.
+- `**` is not special here (unlike Copilot's `applyTo`): it stays an ordinary
+  glob matching every touched path.
+- `!`-negated entries are passed through untouched, so they behave exactly like a
+  native rule's negated glob.
+- `description` precedence: an explicit non-blank `description`, else the FIRST
+  body heading (`#`, `##`, … with its `#` run stripped), else the file stem
+  (`typescript.md` → `typescript`).
+- `paths` globs are relative to the working directory, exactly as authored; the
+  whole rule is a touched-path, pinned, inform-level project rule; parse errors
+  appear in `/rules` under the real file.
+
 Importers are on for trusted projects. Disable all of them for the Pi process
 with:
 
@@ -250,8 +285,6 @@ PI_RULES_IMPORT=none pi
 Only a trimmed, case-insensitive `none` disables import; absent or unrecognized
 values keep them on. With import disabled no importer file is listed, stat-ed,
 or read, so the behavior is identical to a repository that has no such files.
-Claude `.claude/rules` support is planned next (T14) and ships as a second
-importer through the same seam; until then, only the Copilot importer is active.
 
 ## Token budget
 
