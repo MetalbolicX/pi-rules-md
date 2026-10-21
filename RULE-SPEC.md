@@ -12,6 +12,7 @@ pipeline applies the remaining semantics.
 | Project rules (cwd) | `<project>/.pi/rules/**/*.md` | the project is trusted (`ctx.isProjectTrusted()`) |
 | Project rules (ancestors) | every `<dir>/.pi/rules/**/*.md` for each `<dir>` between the working directory's parent and the enclosing git root (inclusive) | the project is trusted |
 | Project rules (nested) | `<cwd>/<dir>/…/.pi/rules/**/*.md` for each `<dir>` below the working directory, at most 6 directory segments deep, never under `.git/` or `node_modules/` | the project is trusted |
+| Project rules (Copilot import) | `<cwd>/.github/instructions/**/*.instructions.md` | the project is trusted and importers are enabled (`PI_RULES_IMPORT` is not `none`) |
 | Global rules | `~/.pi/agent/rules/**/*.md` | always |
 
 The enclosing git root is resolved once per working directory from
@@ -39,12 +40,14 @@ walk-up bound, and an untrusted project reads no project directory at all
   `/rules` report may name a rebased form of the pattern in its reason.
 - **Rule id** = file stem, disambiguated across the whole merged pass:
   on collision the first file in deterministic order (cwd rules, then each
-  ancestor from nearest to the git root, then nested rules, then global; sorted
-  by path within each directory) keeps the bare stem; later collisions get
-  `-2`, `-3`, … (e.g. cwd `a.md` → `a`, git-root `a.md` → `a-2`, nested
-  `packages/b/.pi/rules/a.md` → `a-3`, global `a.md` → `a-4`).
+  ancestor from nearest to the git root, then nested rules, then imported
+  rules, then global; sorted by path within each directory) keeps the bare
+  stem; later collisions get `-2`, `-3`, … (e.g. cwd `a.md` → `a`, git-root
+  `a.md` → `a-2`, nested `packages/b/.pi/rules/a.md` → `a-3`, imported
+  `a.instructions.md` → `a-4`, global `a.md` → `a-5`).
 - Project rules come first — cwd rules, then ancestor rules, then nested
-  rules — and global rules last; within a directory, files are sorted by path.
+  rules, then imported rules — and global rules last; within a directory,
+  files are sorted by path.
   Nested directories are ordered shallow-first (nearest to cwd before deeper)
   and lexicographically within the same depth, so ordering never depends on
   filesystem enumeration order.
@@ -75,6 +78,42 @@ walk-up bound, and an untrusted project reads no project directory at all
   it never breaks the session. An unreadable file produces a
   `read-failure` entry. A file that vanishes mid-scan is skipped
   silently.
+
+### Imported rule formats
+
+Instructions authored for another tool are read in place, never copied or
+rewritten, so the original tool keeps working. Every import becomes an ordinary
+project rule: `version: 1`, `match: touched`, `load: pinned`,
+`enforcement: inform`, `priority: 0`, `source: project`, trust-gated exactly
+like `.pi/rules`, cached by mtime exactly like any rule file, and reported in
+`/rules` under its REAL file path. Imported files are listed after the nested
+`.pi/rules` dirs and before the global dir, and join the same id namespace.
+
+| Importer | Directory | Mapping |
+| --- | --- | --- |
+| Copilot | `<cwd>/.github/instructions/**/*.instructions.md` | `applyTo` (comma-separated globs); the entry `**` means always-apply; absent `applyTo` — or no frontmatter at all — means `applyTo: **` (always); `description` optional, fallback is the file stem; every other key is ignored |
+
+- **Glob scale.** An importer's globs are relative to the working directory
+  (the rule base, not the importer's directory), so a Copilot
+  `applyTo: src/**` matches the cwd-relative `src/**` exactly as authored — no
+  prefix is prepended for the importer root.
+- **Reference path.** An imported rule is referenceable by its
+  importer-root-relative path (`typescript.instructions.md`), just as a nested
+  rule is relative to its own `.pi/rules`.
+- **Lenient parsing.** Imports do NOT use the strict native schema: unknown
+  frontmatter keys are ignored (never `unknown-key` errors), the native
+  `version`/`description`/activation-condition requirements do not apply, and
+  the markdown body is kept verbatim (no blank-edge trimming). Only real
+  document damage is an error and still surfaces in `/rules` under the real
+  file: broken YAML, a non-mapping frontmatter root, an unterminated `---`
+  block, a non-string `description`, and a non-string or empty `applyTo` list.
+- **`applyTo` splitting.** Entries are comma-separated, trimmed,
+  empty entries dropped, and duplicates collapsed to first-seen order. Only the
+  bare entry `**` is the all-matching form; `**/*.md`, `src/**` and friends stay
+  ordinary touched-path globs.
+- **Disabling.** `PI_RULES_IMPORT=none` (trimmed, case-insensitive) disables
+  EVERY importer: no importer root is listed, stat-ed or read, and a repository
+  without importer files behaves identically in both modes.
 
 ## 2. Document shape
 

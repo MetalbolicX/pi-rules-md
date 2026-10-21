@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { globalRulesDir, projectRulesDir, resolveAttach, resolveBudget } from "./rules-paths.ts";
+import { globalRulesDir, projectRulesDir, resolveAttach, resolveBudget, resolveImport } from "./rules-paths.ts";
 
 describe("rules paths", () => {
 	it("normalizes global rules directories on Windows", () => {
@@ -22,6 +22,24 @@ describe("rules paths", () => {
 		["0", 2000, 2000],
 	])("resolves budget %s", (raw, fallback, expected) => {
 		expect(resolveBudget(raw, fallback)).toBe(expected);
+	});
+});
+
+describe("resolveImport", () => {
+	// S11/D2: importers are ON for trusted projects unless the value is `none`.
+	// Same shape as resolveAttach: only a recognized value disables the default.
+	it.each([
+		["none", false],
+		["NONE", false],
+		[" none ", false],
+		[undefined, true],
+		["", true],
+		["copilot", true],
+		["all", true],
+		["off", true],
+		["0", true],
+	])("resolves the importer toggle %s", (raw, expected) => {
+		expect(resolveImport(raw)).toBe(expected);
 	});
 });
 

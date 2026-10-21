@@ -1,8 +1,9 @@
 /**
  * Rule discovery (imperative shell): finds markdown rule files in the global
- * and project rules directories, parses them through the pure frontmatter
- * parser, and maintains an mtime-keyed cache across calls so unchanged files
- * are never re-read.
+ * and project rules directories (plus importer-owned formats, S11), parses them
+ * through the pure frontmatter parser — or the owning importer's lenient adapter
+ * — and maintains an mtime-keyed cache across calls so unchanged files are
+ * never re-read.
  *
  * Functional core / imperative shell:
  * - `discover` orchestrates injected I/O only (`DiscoveryDeps`); it holds no
@@ -65,13 +66,27 @@
  *   mtime re-reads and re-parses; files no longer listed are dropped.
  * - Parse failures (`parseRule` Result err) are collected into `errors`,
  *   never thrown.
+ * - Importers (S11): when the project is trusted, every configured importer's
+ *   root (`<cwd>/<importer.dir>`) is listed through the SAME `listRuleFiles`
+ *   seam and filtered to `importer.fileSuffix`; each file is adapted by the
+ *   importer's own LENIENT adapter (shell/importers), never by `parseRule`.
+ *   Imported rules enter the pass AFTER the nested dirs and BEFORE global, in
+ *   ONE shared id namespace, with `source: "project"` and the fixed importer
+ *   contract (version 1, touched, pinned, inform). Their globs are authored
+ *   against cwd, so the rule base IS cwd and nothing is rebased; their
+ *   `relativePath` is relative to the importer's OWN root. An untrusted project
+ *   lists no importer root, and no configured importer means zero listing.
  */
 import { lstat, readFile, stat } from "node:fs/promises";
 import { glob } from "tinyglobby";
 import { parseRule } from "../src/frontmatter.ts";
 import type { GlobScanner } from "../src/match.ts";
+import { ok } from "../src/result.ts";
+import type { Result } from "../src/result.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
 import type { NormalizedPath, Rule, RuleError, RuleSource } from "../src/types.ts";
+import { fileNameOf, importerFileStem, importerRootDir, materializeImportedRule } from "./importers/seam.ts";
+import type { Importer } from "./importers/seam.ts";
 import { rebaseRuleGlobs } from "./match.ts";
 
 /** Injected filesystem surface for discovery. */
@@ -107,6 +122,15 @@ export interface DiscoveryOptions {
 	readonly isProjectTrusted: boolean;
 	/** Working directory: the scale touched/existing paths are expressed on. */
 	readonly cwd: string;
+	/**
+	 * Imported rule formats (S11). Each importer lists its own root below cwd
+	 * (`<cwd>/<importer.dir>`) and adapts its files leniently. Enumerated ONLY for
+	 * a trusted project — after the `.pi/rules` walk-up/nested dirs, before global
+	 * — into the same project id namespace. `undefined` or empty means no importer
+	 * root is listed at all, which is the composition-root shape of
+	 * `PI_RULES_IMPORT=none`.
+	 */
+	readonly importers?: readonly Importer[];
 }
 
 /**
@@ -312,11 +336,20 @@ export const nestedProjectRuleDirs = (cwd: string, listed: readonly string[]): r
  * and the later-source rule suffixes — deterministic by source order, then
  * path. (The selection pipeline's content-tie dedupe still prefers project
  * rules for identical content.)
+ *
+ * `stemOf` is the per-segment stem contract: native rules use the file stem
+ * (`a.md` → `a`), an importer's files use the stem its own format defines
+ * (`typescript.instructions.md` → `typescript`), so imported ids compete in the
+ * SAME namespace instead of leaking a format suffix into the id.
  */
-const assignSourceIds = (paths: readonly NormalizedPath[], used: Set<string>): ReadonlyMap<NormalizedPath, string> => {
+const assignSourceIds = (
+	paths: readonly NormalizedPath[],
+	used: Set<string>,
+	stemOf: (abs: NormalizedPath) => string = fileStem,
+): ReadonlyMap<NormalizedPath, string> => {
 	const ids = new Map<NormalizedPath, string>();
 	for (const abs of paths) {
-		const stem = fileStem(abs);
+		const stem = stemOf(abs);
 		let id = stem;
 		if (used.has(id)) {
 			let n = 2;
@@ -378,6 +411,40 @@ type LoadedRule =
 	| { readonly kind: "skipped" };
 
 /**
+ * Rule parser seam: raw text plus the discovery-resolved identity in, a {@link Rule}
+ * out. Native rules parse through `src/frontmatter.ts` (strict, source-carrying);
+ * imported rules adapt through their format's LENIENT adapter and materialize the
+ * fixed importer contract (shell/importers). The id is always the one discovery
+ * resolved in the shared namespace — never the parser's own idea of identity.
+ */
+type RuleParser = (raw: string, abs: NormalizedPath, id: string) => Result<Rule, RuleError>;
+
+/** Strict native parser for one source: `parseRule` plus discovery's resolved id. */
+const nativeRuleParser = (source: RuleSource): RuleParser => (raw, abs, id) => {
+	const parsed = parseRule(raw, { path: abs, source });
+	return parsed.ok ? ok({ ...parsed.value, id: ruleId(id) }) : parsed;
+};
+
+/**
+ * Lenient importer parser for one (importer, root) pair: the adapter owns every
+ * format decision, and the materialized rule carries the importer-root-relative
+ * reference path (`foo.instructions.md`) plus the shared-namespace id.
+ */
+const importedRuleParser =
+	(importer: Importer, dir: NormalizedPath): RuleParser =>
+	(raw, abs, id) => {
+		const adapted = importer.adapter({ path: abs, text: raw });
+		if (!adapted.ok) {
+			return adapted;
+		}
+		const prefix = `${dir}/`;
+		const relative = abs.startsWith(prefix) ? abs.slice(prefix.length) : fileNameOf(abs);
+		return ok(
+			materializeImportedRule(adapted.value, { path: abs, id: ruleId(id), relativePath: normalizedPath(relative) }),
+		);
+	};
+
+/**
  * Loads one listed rule file: stat → cache check → (re)read → parse. On a
  * cache hit with an unchanged mtimeMs the cached rule or error is reused
  * (no read) and the same entry object carries into the next cache; a cached
@@ -388,14 +455,19 @@ type LoadedRule =
  * A non-ENOENT read failure is returned as a `read-failure` error and cached
  * alongside the mtime. Parse failures are returned as errors and cached
  * alongside the mtime.
+ *
+ * The `parse` seam is what keeps native and imported rules on one caching path:
+ * both produce a {@link Rule} (or a typed error) with discovery's resolved id,
+ * so importer files get exactly the same mtime reuse, id-refresh, and
+ * vanished-file semantics as `.pi/rules` files.
  */
 const loadRule = async (
 	deps: DiscoveryDeps,
 	cache: DiscoveryCache,
 	nextCache: Map<NormalizedPath, DiscoveryCacheEntry>,
 	abs: NormalizedPath,
-	source: RuleSource,
 	id: string,
+	parse: RuleParser,
 ): Promise<LoadedRule> => {
 	let statResult: { readonly mtimeMs: number };
 	try {
@@ -447,15 +519,14 @@ const loadRule = async (
 		nextCache.set(abs, { mtimeMs: statResult.mtimeMs, error });
 		return { kind: "error", error };
 	}
-	const parsed = parseRule(raw, { path: abs, source });
+	const parsed = parse(raw, abs, id);
 	if (!parsed.ok) {
 		nextCache.set(abs, { mtimeMs: statResult.mtimeMs, error: parsed.error });
 		return { kind: "error", error: parsed.error };
 	}
-	// Discovery finalizes the id to the (disambiguated) file stem (discovery
-	// contract); the parser stays the sole owner of validation, defaults, and
-	// content.
-	const rule: Rule = { ...parsed.value, id: ruleId(id) };
+	// Discovery owns the id (disambiguation namespace); the parser seam already
+	// materialized it, so the rule is stored as produced.
+	const rule: Rule = parsed.value;
 	nextCache.set(abs, { mtimeMs: statResult.mtimeMs, rule });
 	return { kind: "rule", rule };
 };
@@ -505,6 +576,13 @@ const enumerateNested = async (
  * result after the walk-up list and before global. An untrusted project is
  * never enumerated at all, and a project with no nested rules pays only the
  * enumeration glob — the pass itself is unchanged.
+ *
+ * Importer half (S11): for a trusted project, each configured importer lists
+ * `<cwd>/<importer.dir>` and adapts the files carrying its suffix. The segment
+ * runs after the nested dirs and before global, joins the SAME id namespace,
+ * and materializes the importer contract (version 1, touched matching, pinned
+ * loading, inform enforcement, project source). No configured importer means no
+ * importer root is listed at all.
  */
 export const discover = async (
 	deps: DiscoveryDeps,
@@ -522,7 +600,20 @@ export const discover = async (
 		: [];
 	// Shared across the merged pass so ids stay unique project-wide + global-wide.
 	const usedIds = new Set<string>();
-	const loadSource = async (dir: string, source: RuleSource, entry: ProjectRuleDir | undefined): Promise<void> => {
+
+	/**
+	 * Loads one pass segment: list → filter → sort → assign shared ids → load
+	 * each file through its parser seam (stat/cache/read live in `loadRule`).
+	 * A rejected listing contributes one `source-unreadable` error and nothing
+	 * else, exactly like the pre-importer sources.
+	 */
+	const loadSegment = async (
+		dir: string,
+		entry: ProjectRuleDir | undefined,
+		accept: (abs: NormalizedPath) => boolean,
+		stemOf: (abs: NormalizedPath) => string,
+		parserOf: (abs: NormalizedPath) => RuleParser,
+	): Promise<void> => {
 		let listed: readonly string[];
 		try {
 			listed = await deps.listRuleFiles(dir);
@@ -536,11 +627,11 @@ export const discover = async (
 			});
 			return;
 		}
-		const paths = listed.map((name) => resolveListed(dir, name)).filter(isRuleFile).sort();
-		const ids = assignSourceIds(paths, usedIds);
+		const paths = listed.map((name) => resolveListed(dir, name)).filter(accept).sort();
+		const ids = assignSourceIds(paths, usedIds, stemOf);
 		for (const abs of paths) {
-			const id = ids.get(abs) ?? fileStem(abs);
-			const loaded = await loadRule(deps, cache, nextCache, abs, source, id);
+			const id = ids.get(abs) ?? stemOf(abs);
+			const loaded = await loadRule(deps, cache, nextCache, abs, id, parserOf(abs));
 			if (loaded.kind === "rule") {
 				rules.push(entry === undefined ? loaded.rule : finalizeProjectRule(loaded.rule, entry, opts.cwd));
 			} else if (loaded.kind === "error") {
@@ -548,10 +639,30 @@ export const discover = async (
 			}
 		}
 	};
+
 	for (const entry of projectDirs) {
-		await loadSource(entry.dir, "project", entry);
+		await loadSegment(entry.dir, entry, isRuleFile, fileStem, () => nativeRuleParser("project"));
 	}
-	await loadSource(opts.globalDir, "global", undefined);
+	// Importers (S11): AFTER the nested dirs, BEFORE global, behind the same
+	// trust gate (an untrusted project lists no importer root at all). The rule
+	// base is cwd — imports author their globs against the project root — so the
+	// rebase is the identity and nothing is prepended for a root below cwd.
+	if (opts.isProjectTrusted) {
+		for (const importer of opts.importers ?? []) {
+			const dir = importerRootDir(opts.cwd, importer);
+			if (dir === undefined) {
+				continue;
+			}
+			await loadSegment(
+				dir,
+				{ dir, base: opts.cwd },
+				(abs) => importerFileStem(abs, importer) !== undefined,
+				(abs) => importerFileStem(abs, importer) ?? fileStem(abs),
+				() => importedRuleParser(importer, dir),
+			);
+		}
+	}
+	await loadSegment(opts.globalDir, undefined, isRuleFile, fileStem, () => nativeRuleParser("global"));
 	return { rules, errors, cache: nextCache };
 };
 

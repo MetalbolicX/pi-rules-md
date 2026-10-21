@@ -50,6 +50,8 @@ import { piEventToStateEvents } from "./shell/collectors.ts";
 import type { PiEventShape } from "./shell/collectors.ts";
 import { discover as discoverRules, nodeDiscoveryDeps, projectRuleDirs, tinyglobbyScanner } from "./shell/discovery.ts";
 import type { DiscoveryCacheEntry, DiscoveryDeps, ProjectRuleDir } from "./shell/discovery.ts";
+import { COPILOT_IMPORTER } from "./shell/importers/copilot.ts";
+import type { Importer } from "./shell/importers/seam.ts";
 import { applyInjection, removeInjection } from "./shell/injection.ts";
 import { resolveBranch, resolveGitRoot } from "./shell/git-branch.ts";
 import type { ExecLike } from "./shell/git-branch.ts";
@@ -58,7 +60,7 @@ import { createReadRuleTool } from "./shell/read-rule.ts";
 import type { ReadRuleToolDefinition } from "./shell/read-rule.ts";
 import { createCachedScanner } from "./shell/scan-cache.ts";
 import { DEFAULT_BUDGET_TOKENS, evaluateCurrent, renderTraceReport, runInjectionCycle } from "./shell/pipeline.ts";
-import { globalRulesDir, resolveAttach, resolveBudget } from "./shell/rules-paths.ts";
+import { globalRulesDir, resolveAttach, resolveBudget, resolveImport } from "./shell/rules-paths.ts";
 import type { PipelineDeps } from "./shell/pipeline.ts";
 import { newlyActivated, remainingBudget, renderAttachments } from "./src/attach.ts";
 import { TOUCHED_ENTRY_TYPE, addedPaths, initialState, touchedPathsFromEntries, transition } from "./src/state.ts";
@@ -492,14 +494,21 @@ export const projectDirsForCycle = async (
  * the same trust gate). The mtime cache lives here, so one instance per
  * deployment shares it across cycles (exactly what `piRulesMd` does).
  *
+ * Importers (S11) arrive as an explicit list: the composition root resolves
+ * `PI_RULES_IMPORT` once and passes an EMPTY list when importers are disabled,
+ * so a disabled deployment never lists an importer root (no glob, no read) —
+ * the same shape discovery uses for any absent importer list.
+ *
  * Exported because it is the seam the wiring tests drive: it is the same object
  * the production factory installs, so an end-to-end test exercises the real
- * walk-up + nested enumeration + rebasing path without a second composition.
+ * walk-up + nested enumeration + importer + rebasing path without a second
+ * composition.
  */
 export const createProjectDiscovery = (
 	discoveryDeps: DiscoveryDeps,
 	gitRootOf: (cwd: string) => Promise<string | undefined>,
 	globalDir: string,
+	importers: readonly Importer[] = [],
 ): PipelineDeps["discover"] => {
 	const cache: Map<NormalizedPath, DiscoveryCacheEntry> = new Map();
 	return async (opts) => {
@@ -512,6 +521,7 @@ export const createProjectDiscovery = (
 			projectDirs,
 			isProjectTrusted: opts.isProjectTrusted,
 			cwd: opts.cwd,
+			importers,
 		});
 		return { rules: result.rules, errors: result.errors };
 	};
@@ -527,9 +537,14 @@ export default function piRulesMd(pi: ExtensionAPI): void {
 	const scanCache = createCachedScanner(createScopedScanner(tinyglobbyScanner));
 	// One git-root query per cwd (see createGitRootMemo), shared by every cycle.
 	const gitRootOf = createGitRootMemo((command, args, options) => pi.exec(command, args, options));
+	// Importers (S11/D2): on for trusted projects unless `PI_RULES_IMPORT=none`.
+	// The disabled shape is an EMPTY importer list, so discovery lists no importer
+	// root and the pre-importer behavior is byte-identical even when the files
+	// exist. Claude `.claude/rules` is T14; the seam takes it as a second entry.
+	const importers: readonly Importer[] = resolveImport(process.env.PI_RULES_IMPORT) ? [COPILOT_IMPORTER] : [];
 	const deps: ExtensionDeps = {
 		pipeline: {
-			discover: createProjectDiscovery(nodeDiscoveryDeps(), gitRootOf, globalRulesDir(homedir())),
+			discover: createProjectDiscovery(nodeDiscoveryDeps(), gitRootOf, globalRulesDir(homedir()), importers),
 			scan: scanCache.scanner,
 			budget: resolveBudget(process.env.PI_RULES_MAX_TOKENS, DEFAULT_BUDGET_TOKENS),
 		},

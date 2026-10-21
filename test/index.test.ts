@@ -26,6 +26,8 @@ import type { PiEventShape } from "../shell/collectors.ts";
 import { globMatcher } from "../src/conditions/predicates.ts";
 import { createCachedScanner } from "../shell/scan-cache.ts";
 import { nodeDiscoveryDeps, tinyglobbyScanner } from "../shell/discovery.ts";
+import { COPILOT_IMPORTER } from "../shell/importers/copilot.ts";
+import type { Importer } from "../shell/importers/seam.ts";
 import { createScopedScanner } from "../shell/match.ts";
 import type { ReadRuleToolDefinition } from "../shell/read-rule.ts";
 import { DEFAULT_BUDGET_TOKENS } from "../shell/pipeline.ts";
@@ -1675,7 +1677,10 @@ const nestedRuleText = (description: string, globs: readonly string[], match: "t
  * step is `createProjectDiscovery`, the same factory `piRulesMd` uses, so this
  * exercises the real walk-up + nested enumeration + rebasing path.
  */
-const productionNestedDeps = (root: string): {
+const productionNestedDeps = (
+	root: string,
+	importers: readonly Importer[] = [],
+): {
 	readonly deps: ExtensionDeps;
 	readonly scanCalls: Array<{ readonly patterns: readonly string[]; readonly cwd: string }>;
 } => {
@@ -1688,7 +1693,7 @@ const productionNestedDeps = (root: string): {
 	);
 	const deps: ExtensionDeps = {
 		pipeline: {
-			discover: createProjectDiscovery(nodeDiscoveryDeps(), async () => normalizedPath(root), join(root, "no-global-rules")),
+			discover: createProjectDiscovery(nodeDiscoveryDeps(), async () => normalizedPath(root), join(root, "no-global-rules"), importers),
 			scan: cache.scanner,
 			budget: DEFAULT_BUDGET_TOKENS,
 		},
@@ -1741,6 +1746,111 @@ describe("nested rule discovery wiring (S10 nested half)", () => {
 			expect(sections["pi-rules-md"]).toContain("Nested exists rule");
 			// The rebased absolute form is scanned at the nested base itself.
 			expect(scanCalls.map((call) => call.cwd)).toContain(normalizedPath(join(root, "packages/b/src")));
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+});
+
+/**
+ * Importer wiring (S11 Copilot adapter + D2 toggle): the whole production
+ * composition — temp repo → `.github/instructions` listing → Lenient Copilot
+ * adapter → materialized project rules → touched-path matching → injected
+ * section — plus the `/rules` visibility of importer parse errors and the
+ * `PI_RULES_IMPORT=none` shape (an empty importer list at the composition root).
+ */
+describe("Copilot importer wiring (S11)", () => {
+	/** Copilot instruction file text with frontmatter and a recognizable body. */
+	const copilotText = (description: string, frontmatter: string, body: string): string =>
+		`---\ndescription: ${description}\n${frontmatter}\n---\n${body}\n`;
+
+	it("activates an imported rule on a touched path matching applyTo", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-wiring-import-"));
+		try {
+			await mkdir(join(root, ".github/instructions"), { recursive: true });
+			await writeFile(
+				join(root, ".github/instructions/typescript.instructions.md"),
+				copilotText("TypeScript conventions", "applyTo: src/**", "Use strict types."),
+			);
+			const { deps } = productionNestedDeps(root, [COPILOT_IMPORTER]);
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx(normalizedPath(root));
+			const sections: Record<string, string> = {};
+
+			// A path outside the rule's applyTo globs leaves the section absent.
+			await emitSignal(api, toolExecutionStart("read", join(root, "docs/guide.md")), ctx);
+			await emitStart(api, ctx, sections);
+			expect(sections["pi-rules-md"]).toBeUndefined();
+
+			// A matching touched path activates the imported rule.
+			await emitSignal(api, toolExecutionStart("read", join(root, "src/x.ts")), ctx);
+			await emitStart(api, ctx, sections);
+			expect(sections["pi-rules-md"]).toContain("Use strict types.");
+
+			// The import is referenceable by its importer-root-relative path.
+			const tool = api.tools.get("read_rule");
+			const fetched = await tool?.execute("tool-call", { name: "typescript.instructions.md" }, undefined, undefined, {} as never);
+			expect(fetched?.content).toEqual([{ type: "text", text: "Use strict types.\n" }]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("activates an `applyTo: '**'` import with no touched path at all", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-wiring-import-always-"));
+		try {
+			await mkdir(join(root, ".github/instructions"), { recursive: true });
+			await writeFile(
+				join(root, ".github/instructions/team.instructions.md"),
+				copilotText("Team conventions", "applyTo: '**'", "Always write tests."),
+			);
+			const { deps } = productionNestedDeps(root, [COPILOT_IMPORTER]);
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx(normalizedPath(root));
+
+			const sections = await emitStart(api, ctx);
+			expect(sections["pi-rules-md"]).toContain("Always write tests.");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reports an importer parse error in /rules under the real file", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-wiring-import-error-"));
+		try {
+			await mkdir(join(root, ".github/instructions"), { recursive: true });
+			const broken = join(root, ".github/instructions/broken.instructions.md");
+			await writeFile(broken, copilotText("Broken", "applyTo:\n  - src/**\n  - docs/**", "Body."));
+			const { deps } = productionNestedDeps(root, [COPILOT_IMPORTER]);
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx(normalizedPath(root));
+
+			await emitStart(api, ctx, {});
+			const report = await invokeRules(api);
+			expect(report).toContain(`parse error: ${normalizedPath(broken)} (invalid-value)`);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("lists no importer rules when the toggle is off (empty importer list)", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-wiring-import-off-"));
+		try {
+			await mkdir(join(root, ".github/instructions"), { recursive: true });
+			await writeFile(
+				join(root, ".github/instructions/team.instructions.md"),
+				copilotText("Team conventions", "applyTo: '**'", "Always write tests."),
+			);
+			const { deps } = productionNestedDeps(root);
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx(normalizedPath(root));
+
+			const sections = await emitStart(api, ctx);
+			expect(sections["pi-rules-md"]).toBeUndefined();
 		} finally {
 			await rm(root, { recursive: true, force: true });
 		}

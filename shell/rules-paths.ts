@@ -1,6 +1,7 @@
 /**
  * Single source of truth for pi's rules layout (M2), the environment-budget
- * resolution seam (M5), and the mid-run attachment toggle (S9/D3).
+ * resolution seam (M5), the mid-run attachment toggle (S9/D3), and the importer
+ * toggle (S11/D2).
  */
 import { normalizedPath } from "../src/types.ts";
 
@@ -23,3 +24,13 @@ export const resolveBudget = (raw: string | undefined, fallback: number): number
  * empty string, or any unrecognized value keeps the feature enabled.
  */
 export const resolveAttach = (raw: string | undefined): boolean => (raw ?? "").trim().toLowerCase() !== "off";
+
+/**
+ * Resolves the importer toggle (S11/D2: importers are on by default for trusted
+ * projects). Mirroring `resolveAttach`, only a trimmed, case-insensitive `none`
+ * disables them — an absent variable, an empty string, or any unrecognized value
+ * keeps every configured importer enabled. The composition root turns a `false`
+ * answer into an EMPTY importer list, so discovery never lists an importer root
+ * in that mode (zero globs, zero reads).
+ */
+export const resolveImport = (raw: string | undefined): boolean => (raw ?? "").trim().toLowerCase() !== "none";

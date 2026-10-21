@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discover, MAX_NESTED_RULES_DIR_DEPTH, nestedProjectRuleDirs, nodeDiscoveryDeps, projectRuleDirs, tinyglobbyScanner } from "./discovery.ts";
 import type { DiscoveryDeps, DiscoveryOptions } from "./discovery.ts";
+import { COPILOT_IMPORTER } from "./importers/copilot.ts";
+import type { Importer } from "./importers/seam.ts";
 import { normalizedPath } from "../src/types.ts";
 
 const GLOBAL_DIR = "/home/u/.pi/agent/rules";
@@ -1045,5 +1047,197 @@ describe("production adapters — nested enumeration (S10 nested half)", () => {
 	it("resolves a missing cwd to an empty enumeration", async () => {
 		const found = await nodeDiscoveryDeps().listNestedRuleDirs(normalizedPath("/does/not/exist/anywhere"));
 		expect(found).toEqual([]);
+	});
+});
+
+/**
+ * Importer discovery (S11 seam + Copilot adapter): imported files are project
+ * rules listed behind the SAME trust gate as `.pi/rules`, materialized with the
+ * importer contract (v1, touched, pinned, inform, project source, stem id from
+ * the shared namespace, importer-root-relative reference path), placed after
+ * the nested dirs and before global, and cached by mtime like any other rule
+ * file. With no importers configured nothing is listed at all (the
+ * `PI_RULES_IMPORT=none` composition-root path).
+ */
+describe("importer discovery (S11)", () => {
+	/** Copilot's root below cwd for these fixtures. */
+	const IMPORT_DIR = "/work/.github/instructions";
+
+	/** Minimal Copilot instructions file: frontmatter `applyTo` plus a body. */
+	const copilotText = (applyTo: string, body = "Imported body.\n"): string => `---\napplyTo: ${applyTo}\n---\n${body}`;
+
+	/** Single-directory project options plus an importer list. */
+	const importerOpts = (isProjectTrusted = true, importers: readonly Importer[] = [COPILOT_IMPORTER]): DiscoveryOptions => ({
+		globalDir: GLOBAL_DIR,
+		projectDirs: [{ dir: PROJECT_DIR, base: "/work" }],
+		cwd: "/work",
+		isProjectTrusted,
+		importers,
+	});
+
+	it("lists `<cwd>/.github/instructions/**/*.instructions.md` with the importer contract", async () => {
+		const { deps } = fakeDeps(
+			seed([
+				[`${IMPORT_DIR}/typescript.instructions.md`, file(copilotText("src/**"))],
+				[`${IMPORT_DIR}/nested/api.instructions.md`, file(copilotText("docs/**"))],
+				// Not an instructions file: ignored entirely, not even read.
+				[`${IMPORT_DIR}/notes.md`, file(copilotText("src/**"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), importerOpts());
+		expect(result.errors).toEqual([]);
+		expect(result.rules.map((rule) => rule.id)).toEqual(["api", "typescript"]);
+		expect(result.rules.find((rule) => rule.id === "typescript")).toMatchObject({
+			source: "project",
+			match: "touched",
+			load: "pinned",
+			enforcement: "inform",
+			priority: 0,
+			version: 1,
+			alwaysApply: false,
+			description: "typescript",
+			globs: ["src/**"],
+			path: normalizedPath(`${IMPORT_DIR}/typescript.instructions.md`),
+			// Reference path is relative to the importer's own root.
+			relativePath: normalizedPath("typescript.instructions.md"),
+			content: "Imported body.\n",
+		});
+	});
+
+	it("keeps imported globs cwd-relative (importer base IS cwd), not importer-dir-relative", async () => {
+		// The instructions live BELOW cwd, but Copilot's `applyTo` is authored
+		// against the repository root, so nothing is prepended or consumed.
+		const { deps } = fakeDeps(seed([[`${IMPORT_DIR}/ts.instructions.md`, file(copilotText("src/**/*.ts"))]]));
+		const result = await discover(deps, new Map(), importerOpts());
+		expect(result.rules[0]?.globs).toEqual(["src/**/*.ts"]);
+	});
+
+	it("places imported rules after nested dirs and before global", async () => {
+		const nestedDir = "/work/packages/b/.pi/rules";
+		const { deps } = fakeDeps(
+			seed([
+				[`${PROJECT_DIR}/a.md`, file(ruleText("Cwd"))],
+				[`${nestedDir}/b.md`, file(ruleText("Nested"))],
+				[`${IMPORT_DIR}/c.instructions.md`, file(copilotText("src/**"))],
+				[`${GLOBAL_DIR}/d.md`, file(ruleText("Global"))],
+			]),
+			[nestedDir],
+		);
+		const result = await discover(deps, new Map(), importerOpts());
+		expect(result.rules.map((rule) => `${rule.source}:${rule.id}`)).toEqual([
+			"project:a",
+			"project:b",
+			"project:c",
+			"global:d",
+		]);
+	});
+
+	it("shares ONE id namespace with native project rules (stem disambiguation)", async () => {
+		const { deps } = fakeDeps(
+			seed([
+				[`${PROJECT_DIR}/typescript.md`, file(ruleText("Native"))],
+				[`${IMPORT_DIR}/typescript.instructions.md`, file(copilotText("src/**"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), importerOpts());
+		// Native cwd rules come first in the pass, so they keep the bare stem; the
+		// imported rule takes the suffix (the `.instructions` part is not part of
+		// the stem).
+		expect(result.rules.map((rule) => rule.id)).toEqual(["typescript", "typescript-2"]);
+	});
+
+	it("lists, stats and reads nothing when the project is untrusted", async () => {
+		const { deps, callLog } = fakeDeps(
+			seed([
+				[`${IMPORT_DIR}/typescript.instructions.md`, file(copilotText("src/**"))],
+				[`${GLOBAL_DIR}/g.md`, file(ruleText("Global"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), importerOpts(false));
+		expect(callLog.listed).toEqual([GLOBAL_DIR]);
+		expect(callLog.read).toEqual([`${GLOBAL_DIR}/g.md`]);
+		expect(callLog.stat).toEqual([`${GLOBAL_DIR}/g.md`]);
+		expect(result.rules.map((rule) => rule.id)).toEqual(["g"]);
+		expect(result.errors).toEqual([]);
+	});
+
+	it("reports an importer parse error under the REAL file and keeps the other rules", async () => {
+		const broken = `${IMPORT_DIR}/broken.instructions.md`;
+		const { deps } = fakeDeps(
+			seed([
+				[broken, file("---\napplyTo:\n  - src/**\n---\nBody.\n")],
+				[`${IMPORT_DIR}/ok.instructions.md`, file(copilotText("src/**"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), importerOpts());
+		expect(result.rules.map((rule) => rule.id)).toEqual(["ok"]);
+		expect(result.errors).toHaveLength(1);
+		expect(result.errors[0]?.code).toBe("invalid-value");
+		expect(result.errors[0]?.file).toBe(broken);
+	});
+
+	it("reuses the mtime cache for imported files and re-reads on change", async () => {
+		const imported = `${IMPORT_DIR}/typescript.instructions.md`;
+		const files = seed([[imported, file(copilotText("src/**"))]]);
+		const first = fakeDeps(files);
+		const one = await discover(first.deps, new Map(), importerOpts());
+		expect(one.rules.map((rule) => rule.id)).toEqual(["typescript"]);
+
+		// Unchanged mtime: the cached rule is reused with no second read.
+		const two = await discover(first.deps, one.cache, importerOpts());
+		expect(two.rules).toEqual(one.rules);
+		expect(first.callLog.read).toEqual([imported]);
+
+		// Changed mtime: re-read and re-parsed, the new globs win.
+		files.set(imported, file(copilotText("docs/**"), 2));
+		const three = await discover(first.deps, two.cache, importerOpts());
+		expect(three.rules[0]?.globs).toEqual(["docs/**"]);
+		expect(first.callLog.read).toEqual([imported, imported]);
+		expect(three.cache.has(normalizedPath(imported))).toBe(true);
+	});
+
+	it("lists no importer root when no importers are configured (toggle off)", async () => {
+		const { deps, callLog } = fakeDeps(
+			seed([
+				[`${IMPORT_DIR}/typescript.instructions.md`, file(copilotText("src/**"))],
+				[`${GLOBAL_DIR}/g.md`, file(ruleText("Global"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), importerOpts(true, []));
+		expect(callLog.listed).toEqual([PROJECT_DIR, GLOBAL_DIR]);
+		expect(result.rules.map((rule) => rule.id)).toEqual(["g"]);
+	});
+
+	it("drops an importer whose root escapes cwd, without listing it", async () => {
+		const { deps, callLog } = fakeDeps(seed([[`${IMPORT_DIR}/a.instructions.md`, file(copilotText("src/**"))]]));
+		const escaping: Importer = { ...COPILOT_IMPORTER, dir: "../outside" };
+		const result = await discover(deps, new Map(), importerOpts(true, [escaping]));
+		expect(callLog.listed).not.toContain("/outside");
+		expect(result.rules).toEqual([]);
+		expect(result.errors).toEqual([]);
+	});
+});
+
+describe("production adapters — Copilot importer (S11)", () => {
+	it("discover lists real .instructions.md files below .github/instructions recursively", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-import-"));
+		try {
+			await mkdir(join(root, ".github/instructions/nested"), { recursive: true });
+			await writeFile(join(root, ".github/instructions/a.instructions.md"), "---\napplyTo: src/**\n---\nA body.\n");
+			await writeFile(join(root, ".github/instructions/nested/b.instructions.md"), "No frontmatter: applies everywhere.\n");
+			await writeFile(join(root, ".github/instructions/README.md"), "---\napplyTo: src/**\n---\nnot a rule\n");
+			const result = await discover(nodeDiscoveryDeps(), new Map(), {
+				globalDir: join(root, "no-global-rules"),
+				projectDirs: [],
+				cwd: normalizedPath(root),
+				isProjectTrusted: true,
+				importers: [COPILOT_IMPORTER],
+			});
+			expect(result.errors).toEqual([]);
+			expect(result.rules.map((rule) => rule.id)).toEqual(["a", "b"]);
+			expect(result.rules.find((rule) => rule.id === "b")?.alwaysApply).toBe(true);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });

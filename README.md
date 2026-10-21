@@ -196,12 +196,62 @@ directory segments below the working directory is discovered (so
 
 Rules from every level are project rules: they share one id namespace (nearest
 directory wins the bare stem, later collisions get `-2`, `-3`, … in the order
-cwd → ancestors → nested → global), they are all ordered before global rules,
-and all of them stay behind the project trust gate — an untrusted project lists
-and enumerates no rules directory at all, and git is not consulted. The full
+cwd → ancestors → nested → imported → global), they are all ordered before
+global rules, and all of them stay behind the project trust gate — an untrusted
+project lists and enumerates no rules directory at all, and git is not
+consulted. The full
 contract, including how rebased globs are evaluated, why `/rules` may name a
 rebased pattern, and the exact ordering and depth bound, is in
 [RULE-SPEC.md §1](RULE-SPEC.md#1-file-placement-and-identity).
+
+## Importers (Copilot instructions)
+
+Rules written for another tool are read in place — never copied, moved, or
+rewritten — so the original tool keeps working. The Copilot importer reads
+`.github/instructions/**/*.instructions.md` and turns each file into an ordinary
+project rule: it is trust-gated like `.pi/rules`, cached by mtime like any rule
+file, ordered after the nested `.pi/rules` dirs and before the global dir,
+shares the same id namespace, and appears in `/rules` under its real path.
+
+```text
+.github/instructions/typescript.instructions.md
+---
+applyTo: src/**/*.ts,docs/**
+description: TypeScript conventions
+---
+Use explicit types.
+```
+
+- `applyTo` holds comma-separated globs, trimmed, with empty entries dropped.
+  The entry `**` means "every file" → the rule always applies.
+- An absent `applyTo` — or a file with no frontmatter at all — also means
+  "applies everywhere" (`applyTo: **`), matching Copilot's own semantics.
+- `description` is optional; the fallback is the file stem
+  (`typescript.instructions.md` → `typescript`).
+- Every other frontmatter key (`version`, `excludeAgent`, …) is ignored: this
+  format belongs to Copilot, so its schema is read leniently instead of through
+  the strict native rule schema. Unknown keys never fail an import; only real
+  document damage does (broken YAML, an unterminated block, a non-string
+  `description`, a non-string or empty `applyTo`).
+- `applyTo` globs are relative to the working directory, exactly as authored, so
+  `src/**` matches `src/**` — the importer's own directory never prefixes them.
+- The whole rule is a touched-path, pinned, inform-level project rule; imported
+  files cannot declare a different `match`, `load`, or `enforcement`.
+- Parse errors are not silent: `/rules` reports them under the real file path, so
+  an invalid `applyTo` is visible where it lives.
+
+Importers are on for trusted projects. Disable all of them for the Pi process
+with:
+
+```sh
+PI_RULES_IMPORT=none pi
+```
+
+Only a trimmed, case-insensitive `none` disables import; absent or unrecognized
+values keep them on. With import disabled no importer file is listed, stat-ed,
+or read, so the behavior is identical to a repository that has no such files.
+Claude `.claude/rules` support is planned next (T14) and ships as a second
+importer through the same seam; until then, only the Copilot importer is active.
 
 ## Token budget
 
