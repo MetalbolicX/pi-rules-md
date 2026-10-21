@@ -16,7 +16,7 @@ import type { EvaluationContext, NormalizedPath } from "../types.ts";
 /** A pure unary predicate over a value of type A. */
 export type Predicate<A> = (a: A) => boolean;
 
-/** picomatch matcher for a single path or model id. */
+/** picomatch matcher for a single path, model id or branch name. */
 type Matcher = (path: string) => boolean;
 
 /** picomatch pattern-list factory producing a matcher. */
@@ -65,20 +65,20 @@ export const toolsPredicate = (ruleTools: readonly string[]): ((ctx: EvaluationC
 };
 
 /**
- * Builds a matcher for ONE model-id pattern (v1.2: `model` is a glob, not an
- * exact string).
+ * Builds a matcher for ONE flat-token pattern (v1.2: `model` ids and git
+ * branch names are globs, not exact strings).
  *
  * Reuses the module's single picomatch unwrap; no path normalization and no
- * negation handling — a model id is one flat token, and `!` is not a
+ * negation handling — an id or a branch name is one token, and `!` is not a
  * rule-level negation there. picomatch defaults apply, which is what keeps
- * exact ids working as the degenerate glob (a literal pattern only matches
+ * exact values working as the degenerate glob (a literal pattern only matches
  * itself, case-sensitively).
  *
  * Total by construction: picomatch throws on an empty (or otherwise
  * uncompilable) pattern, so such a pattern degrades to "matches nothing" —
  * predicates never throw.
  */
-const modelPatternMatcher = (pattern: string): Matcher => {
+const tokenPatternMatcher = (pattern: string): Matcher => {
 	try {
 		return picomatch(pattern);
 	} catch {
@@ -93,17 +93,22 @@ const modelPatternMatcher = (pattern: string): Matcher => {
  * model never matches.
  */
 export const modelPredicate = (model: string): ((ctx: EvaluationContext) => boolean) => {
-	const matches = modelPatternMatcher(model);
+	const matches = tokenPatternMatcher(model);
 	return (ctx) => ctx.model !== undefined && matches(ctx.model);
 };
 
 /**
- * Exact branch-name equality (v1: no branch globs — pattern support would
- * need a rule-format decision; revisit only if a format version adds them).
- * An absent session branch never matches.
+ * Matches the session branch name against the rule's branch pattern: a
+ * picomatch glob such as `release/*` or `feat/**`, case-sensitive and with the
+ * same semantics as `modelPredicate`. An exact branch name (`main`,
+ * `feat/rules-v1-2-02-branch`) is the degenerate pattern and keeps matching
+ * only itself; an absent session branch (not a git repo, detached HEAD, or a
+ * failed git call) never matches.
  */
-export const branchPredicate = (branch: string): ((ctx: EvaluationContext) => boolean) => (ctx) =>
-	ctx.branch === branch;
+export const branchPredicate = (branch: string): ((ctx: EvaluationContext) => boolean) => {
+	const matches = tokenPatternMatcher(branch);
+	return (ctx) => ctx.branch !== undefined && matches(ctx.branch);
+};
 
 /** Constant true — backs rules with `alwaysApply: true`. */
 export const alwaysPredicate = (): ((ctx: EvaluationContext) => boolean) => () => true;

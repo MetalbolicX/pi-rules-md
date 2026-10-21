@@ -20,6 +20,10 @@
  *   injection invariant is unchanged.
  * - `ExtensionContext.isProjectTrusted()` still exists; trust gating is
  *   unchanged.
+ * - `exec(command, args, options)` is still on `ExtensionAPI`, resolving to
+ *   `{ stdout, stderr, code, killed }` (`dist/core/exec.d.ts`). The branch seam
+ *   consumes only `stdout` and `code`, and resolves the session branch once per
+ *   `before_agent_start`; every git failure degrades to "no branch".
  */
 import { homedir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -28,6 +32,8 @@ import type { PiEventShape } from "./shell/collectors.ts";
 import { discover as discoverRules, nodeDiscoveryDeps, tinyglobbyScanner } from "./shell/discovery.ts";
 import type { DiscoveryCacheEntry, DiscoveryDeps } from "./shell/discovery.ts";
 import { applyInjection, removeInjection } from "./shell/injection.ts";
+import { resolveBranch } from "./shell/git-branch.ts";
+import type { ExecLike } from "./shell/git-branch.ts";
 import { createReadRuleTool } from "./shell/read-rule.ts";
 import type { ReadRuleToolDefinition } from "./shell/read-rule.ts";
 import { DEFAULT_BUDGET_TOKENS, renderTraceReport, runInjectionCycle } from "./shell/pipeline.ts";
@@ -92,6 +98,12 @@ export interface PiExtensionApiLike {
 	registerCommand(name: string, options: RulesCommandOptions): void;
 	/** Structural mirror of the installed Pi registerTool definition. */
 	registerTool(tool: ReadRuleToolDefinition): void;
+	/**
+	 * Structural mirror of pi's `exec` (installed 1.3.0 `dist/core/exec.d.ts`),
+	 * limited to the fields the branch seam consumes. Production passes the real
+	 * `ExtensionAPI` — assignable without a cast — and tests inject a stub.
+	 */
+	exec: ExecLike;
 }
 
 /** Injected effects of the extension: pipeline deps (testability seam) plus the clock. */
@@ -136,6 +148,9 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 		api.on("session_before_fork", foldSignal);
 
 		api.on("before_agent_start", async (event, ctx) => {
+			// One git ref query per turn: total by contract (shell/git-branch.ts),
+			// so an exec failure yields an absent branch instead of breaking the cycle.
+			const branch = await resolveBranch(ctx.cwd, (command, args, options) => api.exec(command, args, options));
 			const result = await runInjectionCycle({
 				state,
 				cwd: ctx.cwd,
@@ -148,7 +163,7 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 				session: {
 					toolNames: event.systemPromptOptions.selectedTools,
 					model: ctx.model?.id,
-					branch: undefined, // v1 gap: pi exposes no git branch on the handler context.
+					branch,
 				},
 				deps: pipeline,
 			});

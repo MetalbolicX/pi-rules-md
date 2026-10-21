@@ -61,7 +61,7 @@ section when the rule is active.
 | `globs` | string[] | see §4 | — | Glob patterns (OR semantics); `!`-prefixed entries are negations. |
 | `match` | `touched` \| `exists` \| `both` | ✘ | `both` | Activation mode (§5). |
 | `tools` | string[] | ✘ | — | Active only when the current tool selection intersects. |
-| `branch` | string | ✘ | — | Active only on this git branch (v1.2: no live branch source in pi; reserved, and still matched as an exact name). |
+| `branch` | string | ✘ | — | Active only when the session's git branch name matches this picomatch glob pattern (§5); an exact name is the degenerate pattern. The branch is resolved per turn from `git rev-parse --abbrev-ref HEAD`. |
 | `model` | string | ✘ | — | Active only when the session model id matches this picomatch glob pattern; an exact id is the degenerate pattern (§5). |
 | `priority` | integer | ✘ | `0` | Higher wins in selection; ties keep discovery order (stable). |
 | `enforcement` | `enforce` \| `recommend` \| `inform` | ✘ | `inform` | Parsed and validated; does NOT affect selection or rendering in v1 (reserved for future emphasis). |
@@ -107,11 +107,25 @@ positive pattern, then excluded if it matches any negation.
   picomatch's own semantics still apply: a leading `!` negates the pattern, and
   `*` never crosses a `/` (use a `**/` prefix if an id ever contains one).
   Quote patterns that start with `*` — unquoted `*sonnet*` is a YAML alias, not
-  a string. `branch` matching stays exact in v1.2.
+  a string.
+- `branch` is a **picomatch glob pattern over the session's git branch name**,
+  with the same semantics as `model`: case-sensitive, evaluated against the
+  branch name as one flat token, with exact names remaining the degenerate
+  pattern so v1.1 rules keep their behavior. The session branch is resolved
+  once per turn by running `git rev-parse --abbrev-ref HEAD` in the session
+  working directory. Branch names routinely contain `/` and `*` never crosses
+  one, so `release/*` matches `release/1.0` but not `release/v1/1.0`; use
+  `release/**` for the deeper case. Outside a git repository, on a detached
+  HEAD, on a non-zero git exit, or when the command cannot run, the session
+  branch is **absent** — never an error — and a `branch` condition simply does
+  not match.
 - When a declared `model` pattern does not match, the `/rules` report and the
   trace reason name both the pattern and the session model id
   (`model mismatch: session model <id> does not match the rule's model pattern
-  <pattern>`), or `absent` when the session reports no model.
+  <pattern>`), or `absent` when the session reports no model. A failing
+  `branch` condition is reported the same way
+  (`branch mismatch: session branch <name> does not match the rule's branch
+  pattern <pattern>`), with `absent` when the session has no branch.
 - `alwaysApply: true` skips activation and conditions entirely.
 - Before evaluation, the current turn prompt is checked for whole-word, case-insensitive language names: python/pytest → `*.py`, rust → `*.rs`, typescript → `*.ts`, javascript → `*.js`, golang → `*.go`, kotlin → `*.kt`, java → `*.java`, csharp → `*.cs`, ruby → `*.rb`. There is intentionally no bare `go` language trigger.
 - The current turn prompt is also checked for whole-word, case-insensitive matches against each rule's `keywords`; a hit donates that rule's positive globs to the intent set. Keyword metadata does not activate the rule by itself. Intent globs can satisfy a rule's `globs` condition independently of touched/existing path matches, but do not bypass other conditions.
@@ -198,10 +212,17 @@ we do not parse paths from shell command strings.
 
 - `model` is no longer an exact string comparison. It is a picomatch glob
   pattern over the session model id, matched case-sensitively; exact ids remain
-  valid patterns and keep matching exactly. Tools, `branch`, globs, and
-  `alwaysApply` semantics are unchanged in v1.2.
+  valid patterns and keep matching exactly. Tools, globs, and `alwaysApply`
+  semantics are unchanged in v1.2.
 - The `model` mismatch reason now names the rule's pattern and the session model
   id together, instead of only the required value.
+- `branch` is no longer reserved and no longer an exact string comparison. The
+  session branch is resolved live from `git rev-parse --abbrev-ref HEAD` once
+  per turn and matched as a picomatch glob with the same semantics as `model`.
+  Exact branch names remain valid patterns; a missing branch (non-git
+  directory, detached HEAD, git failure) means "no match".
+- The `branch` mismatch reason names the rule's pattern and the session branch,
+  matching the `model` wording.
 - The specification's own example rule used `model: sonnet`, which matched no
   real model id; it is now `model: "*sonnet*"`.
 

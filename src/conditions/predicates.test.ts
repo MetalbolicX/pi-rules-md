@@ -147,6 +147,32 @@ describe("branchPredicate", () => {
 		const matches = branchPredicate("main");
 		expect(matches(contextWith({}))).toBe(false);
 	});
+
+	it("matches a trailing-wildcard branch-family pattern", () => {
+		const matches = branchPredicate("release/*");
+		expect(matches(contextWith({ branch: "release/1.0" }))).toBe(true);
+		expect(matches(contextWith({ branch: "main" }))).toBe(false);
+	});
+
+	it("keeps an exact branch name as the degenerate pattern (match, mismatch, absence)", () => {
+		const matches = branchPredicate("feat/rules-v1-2-02-branch");
+		expect(matches(contextWith({ branch: "feat/rules-v1-2-02-branch" }))).toBe(true);
+		expect(matches(contextWith({ branch: "feat/rules-v1-2" }))).toBe(false);
+		expect(matches(contextWith({}))).toBe(false);
+	});
+
+	it("keeps branch pattern matching case-sensitive", () => {
+		expect(branchPredicate("Main")(contextWith({ branch: "main" }))).toBe(false);
+	});
+
+	it("matches nothing for an empty pattern and never throws", () => {
+		expect(branchPredicate("")(contextWith({ branch: "main" }))).toBe(false);
+	});
+
+	it("keeps `*` from crossing a `/` in the branch name", () => {
+		expect(branchPredicate("release/*")(contextWith({ branch: "release/v1/1.0" }))).toBe(false);
+		expect(branchPredicate("release/**")(contextWith({ branch: "release/v1/1.0" }))).toBe(true);
+	});
 });
 
 describe("alwaysPredicate", () => {

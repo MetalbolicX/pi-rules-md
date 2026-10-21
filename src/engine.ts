@@ -63,8 +63,9 @@ const trustGateResult = (rule: Rule, ctx: EvaluationContext): MatchResult => ({
  * Human-readable reason for the FIRST declared non-path condition that
  * fails, checked in report order tools → model → branch (the same order the
  * matched reasons follow). `undefined` when every declared condition holds.
- * The model reason names both the rule's pattern and the session model id
- * (v1.2): the pattern is what the reader has to compare against.
+ * The model reason names both the rule's pattern and the session model id,
+ * and the branch reason mirrors it for the session branch (v1.2): the pattern
+ * is what the reader has to compare against.
  */
 const firstFailingCondition = (rule: Rule, ctx: EvaluationContext): string | undefined => {
 	if (rule.tools !== undefined && !toolsPredicate(rule.tools)(ctx)) {
@@ -74,7 +75,7 @@ const firstFailingCondition = (rule: Rule, ctx: EvaluationContext): string | und
 		return `model mismatch: session model ${ctx.model ?? "absent"} does not match the rule's model pattern ${rule.model}`;
 	}
 	if (rule.branch !== undefined && !branchPredicate(rule.branch)(ctx)) {
-		return `branch mismatch: rule requires ${rule.branch}, session branch is ${ctx.branch ?? "absent"}`;
+		return `branch mismatch: session branch ${ctx.branch ?? "absent"} does not match the rule's branch pattern ${rule.branch}`;
 	}
 	return undefined;
 };

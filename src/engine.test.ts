@@ -231,6 +231,40 @@ describe("evaluate — non-path condition AND semantics", () => {
 		expect(trace.results[0]).toEqual({ matched: false, ruleId: ruleId("branch-rule"), reason: expect.stringContaining("branch") });
 	});
 
+	it("names the branch pattern and the session branch in the mismatch reason", async () => {
+		const trace = await evaluate(
+			[ruleWith({ id: "branch-rule", globs: ["src/**/*.ts"], branch: "main" })],
+			contextWith({ touchedPaths: ["src/a.ts"], branch: "dev" }),
+			{ scan: scannerReturning([]).scanner, budget: 100 },
+		);
+		expect(reasonOf(trace.results[0])).toBe("branch mismatch: session branch dev does not match the rule's branch pattern main");
+	});
+
+	it("names an absent session branch in the branch mismatch reason", async () => {
+		const trace = await evaluate(
+			[ruleWith({ id: "branch-rule", globs: ["src/**/*.ts"], branch: "main" })],
+			contextWith({ touchedPaths: ["src/a.ts"] }),
+			{ scan: scannerReturning([]).scanner, budget: 100 },
+		);
+		expect(reasonOf(trace.results[0])).toBe("branch mismatch: session branch absent does not match the rule's branch pattern main");
+	});
+
+	it("activates on a branch glob pattern and reports the pattern as the reason", async () => {
+		const trace = await evaluate(
+			[ruleWith({ id: "release-rule", globs: ["src/**/*.ts"], branch: "release/*" })],
+			contextWith({ touchedPaths: ["src/a.ts"], branch: "release/1.0" }),
+			{ scan: scannerReturning([]).scanner, budget: 100 },
+		);
+		expect(trace.results[0]).toEqual({
+			matched: true,
+			ruleId: ruleId("release-rule"),
+			reasons: [
+				{ kind: "glob", pattern: "src/**/*.ts" },
+				{ kind: "branch", branch: "release/*" },
+			],
+		});
+	});
+
 	it("reports the first failing condition in tools → model → branch order", async () => {
 		const trace = await evaluate(
 			[ruleWith({ id: "multi-fail", globs: ["src/**/*.ts"], tools: ["edit"], model: "m1", branch: "main" })],

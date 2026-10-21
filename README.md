@@ -3,8 +3,8 @@
 Pi extension that discovers markdown rule files and injects conditionally
 matched ones into the system prompt. Rules can activate when the agent touches
 files matching their globs, matching files exist in the project, a selected
-tool or model matches, prompt-derived intent satisfies its glob condition, or
-the rule is always active.
+tool, model, or git branch matches, prompt-derived intent satisfies its glob
+condition, or the rule is always active.
 
 Functional core / imperative shell; pure functions and data, no classes.
 
@@ -15,8 +15,8 @@ Functional core / imperative shell; pure functions and data, no classes.
    `~/.pi/agent/rules/**/*.md` (always), parsed with a strict schema, and
    cached by mtime.
 2. **Matching** — each rule's activation is evaluated against the live
-   session: touched paths, existing files, selected tools, current model, and
-   prompt-derived intent.
+   session: touched paths, existing files, selected tools, current model, git
+   branch, and prompt-derived intent.
 3. **Selection** — pinned rule bodies are content-deduped, budgeted, and
    ordered for presentation. On-demand rules are listed by path instead of
    having their bodies injected.
@@ -70,6 +70,25 @@ A plain id such as `claude-opus-4-5` is still valid and matches only itself, so
 existing exact rules behave exactly as before. Quote any pattern that starts
 with `*` — YAML would otherwise read it as an alias. When a model condition
 fails, `/rules` names both the rule's pattern and the session model id.
+
+### Branch patterns
+
+`branch` is the same kind of pattern over the current git branch, resolved once
+per turn with `git rev-parse --abbrev-ref HEAD` in the session working
+directory:
+
+```markdown
+---
+description: Release checklist.
+version: 1
+branch: "release/*"
+---
+```
+
+Exact names such as `main` still match only themselves. Branch names contain
+`/` and `*` never crosses one, so use `feat/**` for a multi-segment family.
+Outside a git repository, on a detached HEAD, or when git fails, the session has
+no branch and a `branch` condition simply does not match — never an error.
 
 ## Pinned and on-demand rules
 

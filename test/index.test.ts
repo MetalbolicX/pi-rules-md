@@ -23,6 +23,7 @@ import type { PiEventShape } from "../shell/collectors.ts";
 import type { ReadRuleToolDefinition } from "../shell/read-rule.ts";
 import { DEFAULT_BUDGET_TOKENS } from "../shell/pipeline.ts";
 import type { DiscoverOptions } from "../shell/pipeline.ts";
+import type { ExecLike, ExecResultLike } from "../shell/git-branch.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
 import type { Rule, RuleError } from "../src/types.ts";
 
@@ -37,6 +38,7 @@ const ruleWith = (fields: {
 	readonly alwaysApply?: boolean;
 	readonly content?: string;
 	readonly load?: "pinned" | "on-demand";
+	readonly branch?: string;
 }): Rule => ({
 	load: fields.load ?? "pinned",
 	relativePath: normalizedPath(`${fields.id ?? "always-on"}.md`),
@@ -45,6 +47,7 @@ const ruleWith = (fields: {
 	source: "project",
 	description: `test rule ${fields.id ?? "always-on"}`,
 	...(fields.globs === undefined ? {} : { globs: fields.globs }),
+	...(fields.branch === undefined ? {} : { branch: fields.branch }),
 	match: fields.match ?? "touched",
 	priority: 0,
 	enforcement: "inform",
@@ -101,8 +104,36 @@ const depsWith = (opts: { readonly rules: readonly Rule[]; readonly errors?: rea
 	return { deps, discoverCalls };
 };
 
+/** One recorded fake exec invocation. */
+interface ExecCall {
+	readonly command: string;
+	readonly args: readonly string[];
+	readonly cwd: string | undefined;
+}
+
+/**
+ * Fake pi `exec`: records every call and answers with one fixed result, or
+ * rejects with `answer` when it is an Error. Default answers code 128 with no
+ * output ("not a git repository"), so a test that does not care about the
+ * branch sees it absent.
+ */
+const fakeExec = (answer: ExecResultLike | Error = { stdout: "", code: 128 }): {
+	readonly exec: ExecLike;
+	readonly calls: ExecCall[];
+} => {
+	const calls: ExecCall[] = [];
+	const exec: ExecLike = async (command, args, options) => {
+		calls.push({ command, args: [...args], cwd: options?.cwd });
+		if (answer instanceof Error) {
+			throw answer;
+		}
+		return answer;
+	};
+	return { exec, calls };
+};
+
 /** Typed fake pi api: records subscriptions per event name plus commands. */
-const fakeApi = (): {
+const fakeApi = (exec: ExecLike = fakeExec().exec): {
 	readonly api: PiExtensionApiLike;
 	readonly signals: Map<string, Array<(event: PiEventShape, ctx: ExtensionContextLike) => unknown>>;
 	readonly starts: Array<(event: BeforeAgentStartLike, ctx: ExtensionContextLike) => unknown>;
@@ -124,6 +155,7 @@ const fakeApi = (): {
 			signals.set(event, list);
 			return () => undefined;
 		},
+		exec,
 		registerCommand(name: string, options: RulesCommandOptions): void {
 			commands.set(name, options);
 		},
@@ -374,5 +406,80 @@ describe("/rules command", () => {
 		expect(report).toContain("active: big (always active)");
 		expect(report).toContain("dropped: over (budget)");
 		expect(report).toContain("parse error: /work/.pi/rules/bad.md (unknown-key): unknown key: owners");
+	});
+});
+
+describe("createRulesExtension branch resolution", () => {
+	/** The pinned argv: one ref query per before_agent_start. */
+	const BRANCH_ARGS = ["rev-parse", "--abbrev-ref", "HEAD"];
+
+	it("resolves the session branch from git once per cycle and activates a branch rule", async () => {
+		const rule = ruleWith({ id: "on-main", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false, branch: "main" });
+		const { deps } = depsWith({ rules: [rule] });
+		const git = fakeExec({ stdout: "main\n", code: 0 });
+		const api = fakeApi(git.exec);
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitSignal(api, toolExecutionStart("edit", "/work/src/a.ts"), ctx);
+		const sections = await emitStart(api, ctx);
+
+		expect(sections["pi-rules-md"]).toContain("test rule on-main");
+		expect(git.calls).toEqual([{ command: "git", args: BRANCH_ARGS, cwd: "/work" }]);
+		expect(await invokeRules(api)).toContain("active: on-main (glob `src/**/*.ts` · branch `main`)");
+	});
+
+	it("treats a detached HEAD as an absent branch and still completes the cycle", async () => {
+		const rules = [
+			ruleWith({ id: "always-on" }),
+			ruleWith({ id: "on-main", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false, branch: "main" }),
+		];
+		const { deps } = depsWith({ rules });
+		const git = fakeExec({ stdout: "HEAD\n", code: 0 });
+		const api = fakeApi(git.exec);
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitSignal(api, toolExecutionStart("edit", "/work/src/a.ts"), ctx);
+		const sections = await emitStart(api, ctx);
+
+		expect(sections["pi-rules-md"]).toContain("test rule always-on");
+		expect(await invokeRules(api)).toContain(
+			"inactive: on-main (branch mismatch: session branch absent does not match the rule's branch pattern main)",
+		);
+	});
+
+	it("completes the cycle with an absent branch when exec rejects", async () => {
+		const rules = [
+			ruleWith({ id: "always-on" }),
+			ruleWith({ id: "on-main", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false, branch: "main" }),
+		];
+		const { deps } = depsWith({ rules });
+		const git = fakeExec(new Error("spawn git ENOENT"));
+		const api = fakeApi(git.exec);
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitSignal(api, toolExecutionStart("edit", "/work/src/a.ts"), ctx);
+		const sections = await emitStart(api, ctx);
+
+		expect(sections["pi-rules-md"]).toContain("test rule always-on");
+		expect(await invokeRules(api)).toContain("inactive: on-main (branch mismatch: session branch absent");
+	});
+
+	it("queries git at most once per before_agent_start", async () => {
+		const { deps } = depsWith({ rules: [ruleWith({})] });
+		const git = fakeExec({ stdout: "main\n", code: 0 });
+		const api = fakeApi(git.exec);
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitStart(api, ctx);
+		await emitStart(api, ctx);
+
+		expect(git.calls).toEqual([
+			{ command: "git", args: BRANCH_ARGS, cwd: "/work" },
+			{ command: "git", args: BRANCH_ARGS, cwd: "/work" },
+		]);
 	});
 });
