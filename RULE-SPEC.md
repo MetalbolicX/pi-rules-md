@@ -9,18 +9,51 @@ pipeline applies the remaining semantics.
 
 | Source | Directory | Loaded when |
 | --- | --- | --- |
-| Project rules | `<project>/.pi/rules/**/*.md` | the project is trusted (`ctx.isProjectTrusted()`) |
+| Project rules (cwd) | `<project>/.pi/rules/**/*.md` | the project is trusted (`ctx.isProjectTrusted()`) |
+| Project rules (ancestors) | every `<dir>/.pi/rules/**/*.md` for each `<dir>` between the working directory's parent and the enclosing git root (inclusive) | the project is trusted |
 | Global rules | `~/.pi/agent/rules/**/*.md` | always |
+
+The enclosing git root is resolved once per working directory from
+`git rev-parse --show-toplevel`. When git reports no root (not a repository,
+git unavailable, non-zero exit, malformed output) discovery behaves exactly as
+a single-directory project: only `<project>/.pi/rules` is read. Nothing above
+the git root is ever read, listed, stat-ed or queried — the root is the
+walk-up bound, and an untrusted project reads no project directory at all
+(neither cwd's nor an ancestor's).
 
 - Discovery is recursive (`**/*.md`); non-`.md` files are ignored; VCS
   internals (`.git/**`) and dependency trees (`node_modules/**`) are never
   scanned.
+- **Rule base.** A rule's globs are relative to the directory owning its `.pi/`
+  folder: a rule at `/repo/.pi/rules` means `/repo/src/**`, one at
+  `/repo/packages/a/.pi/rules` means `/repo/packages/a/src/**`. Rules in
+  `<project>/.pi/rules` keep today's semantics unchanged (their base IS the
+  working directory). Ancestor rules are evaluated on both scales the session
+  actually carries — touched paths inside the working directory are relative to
+  it, touched paths outside it are absolute — so an ancestor rule matches the
+  files its authored globs describe, and it never claims a same-named file in a
+  different package. `!`-negated globs rebase identically. Absolute and
+  `..`-escaping globs are evaluated exactly as authored (no anchor is invented
+  for them). Because a rebased rule can carry more than one evaluated form, the
+  `/rules` report may name a rebased form of the pattern in its reason.
 - **Rule id** = file stem, disambiguated across the whole merged pass:
-  on collision the first file in deterministic order (project before
-  global; sorted by path within each source) keeps the bare stem; later
-  collisions get `-2`, `-3`, … (e.g. project `a.md` → `a`, global
-  `a.md` → `a-2`).
-- Project rules come first; within a source, files are sorted by path.
+  on collision the first file in deterministic order (cwd rules, then each
+  ancestor from nearest to the git root, then global; sorted by path within
+  each directory) keeps the bare stem; later collisions get `-2`, `-3`, … (e.g.
+  cwd `a.md` → `a`, git-root `a.md` → `a-2`, global `a.md` → `a-3`).
+- Project rules come first — cwd rules, then ancestor rules — and global rules
+  last; within a directory, files are sorted by path.
+- A rule from an ancestor directory is referenceable by its own
+  rules-directory-relative path (`nested/rule.md`), like a cwd rule; a path that
+  repeats across directories resolves to the cwd rule (cwd rules are discovered
+  first).
+- Exists matching for ancestor `match: exists` / `both` rules scans the glob's
+  own root and compares absolute paths, so it never widens the scan beyond the
+  directories the globs name. Each distinct glob root costs one scan per cycle,
+  cached like any other scan.
+- **Nested descendant discovery** (`<project>/packages/*/.pi/rules` while the
+  working directory is above them) is a separate, still-pending step: only the
+  walk-up to the git root is implemented today.
 - An unlistable source (e.g. permission error) produces a
   `source-unreadable` error entry for `/rules` and contributes no rules;
   it never breaks the session. An unreadable file produces a

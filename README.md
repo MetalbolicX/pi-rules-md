@@ -11,7 +11,9 @@ Functional core / imperative shell; pure functions and data, no classes.
 ## How it works
 
 1. **Discovery** — every turn, rule files are discovered from
-   `<project>/.pi/rules/**/*.md` (when the project is trusted) and
+   `<project>/.pi/rules/**/*.md`, from every ancestor `.pi/rules` up to the
+   enclosing git root (all of them only when the project is trusted — see
+   [Monorepo rule discovery](#monorepo-rule-discovery)), and from
    `~/.pi/agent/rules/**/*.md` (always), parsed with a strict schema, and
    cached by mtime.
 2. **Matching** — each rule's activation is evaluated against the live
@@ -158,6 +160,41 @@ also provide built-in intent globs (for example, `python` or `pytest` →
 `*.py`; bare `go` intentionally has no trigger). See [RULE-SPEC.md §5](RULE-SPEC.md#5-activation-semantics)
 for the full list and matching semantics.
 
+## Monorepo rule discovery
+
+A working directory inside a monorepo sees the rules of every directory between
+it and the enclosing git root. Discovery reads
+`<cwd>/.pi/rules`, then `<parent>/.pi/rules`, and so on up to
+`<git-root>/.pi/rules` — the git root itself included, and nothing above it.
+The root comes from `git rev-parse --show-toplevel`, resolved once per working
+directory; when git has no answer (not a repository, git missing) only
+`<cwd>/.pi/rules` is read, which is exactly single-directory behavior.
+
+Each rule's globs are relative to the directory that owns its `.pi/` folder, so
+a rule in the repo root describes repo paths and a package rule describes
+package paths:
+
+```text
+repo/                      <- git root
+├── .pi/rules/root.md      globs: "packages/a/src/**/*.ts"  (repo-relative)
+├── packages/a/            <- current working directory
+│   └── .pi/rules/pkg.md   globs: "src/**/*.ts"             (package-relative)
+└── src/…
+```
+
+Here `pkg.md` matches `/repo/packages/a/src/x.ts` and `root.md` matches it too,
+while `root.md`'s pattern never claims `/repo/packages/b/src/x.ts`. Rules from
+every level are project rules: they share one id namespace (nearest directory
+wins the bare stem, later collisions get `-2`, `-3`, …), they are all ordered
+before global rules, and all of them stay behind the project trust gate — an
+untrusted project lists no rules directory at all, and git is not consulted.
+
+Nested discovery in the other direction (`<cwd>/packages/*/.pi/rules` while the
+working directory sits above them) is not implemented yet; only the walk-up to
+the git root is. The contract, including how ancestor globs are evaluated and
+why `/rules` may name a rebased pattern, is in
+[RULE-SPEC.md §1](RULE-SPEC.md#1-file-placement-and-identity).
+
 ## Token budget
 
 Pinned rule bodies use an estimated token budget of 2000 by default. Override
@@ -278,9 +315,12 @@ updated with `pi-rules update`.
 ## Trust model
 
 Project rules (`.pi/rules/`) load only when the project is trusted
-(pi's `isProjectTrusted()`); global rules always load. An unlistable or
-unreadable rule source is reported via `/rules` and never breaks the
-session.
+(pi's `isProjectTrusted()`); global rules always load. In a monorepo that
+covers every rules directory the walk-up finds — an untrusted project lists
+neither the working directory's nor an ancestor's `.pi/rules`, and no git query
+is made for it. Nothing above the enclosing git root is ever read. An
+unlistable or unreadable rule source is reported via `/rules` and never breaks
+the session.
 
 ## Development
 

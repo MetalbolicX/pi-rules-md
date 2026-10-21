@@ -8,11 +8,14 @@
  * these tests never run git and never touch disk.
  */
 import { describe, expect, it } from "vitest";
-import { resolveBranch } from "./git-branch.ts";
+import { resolveBranch, resolveGitRoot } from "./git-branch.ts";
 import type { ExecLike, ExecResultLike } from "./git-branch.ts";
 
 /** The exact argv the seam is pinned to: one ref query per cycle. */
 const BRANCH_ARGS = ["rev-parse", "--abbrev-ref", "HEAD"];
+
+/** The exact argv the git-root query is pinned to (S10 walk-up bound). */
+const ROOT_ARGS = ["rev-parse", "--show-toplevel"];
 
 /** One recorded exec invocation. */
 interface ExecCall {
@@ -92,6 +95,58 @@ describe("resolveBranch", () => {
 		for (const result of malformed) {
 			const exec: ExecLike = async () => result as unknown as ExecResultLike;
 			expect(await resolveBranch("/work", exec)).toBeUndefined();
+		}
+	});
+});
+
+describe("resolveGitRoot", () => {
+	it("resolves the normalized enclosing git root from `git rev-parse --show-toplevel` in cwd", async () => {
+		const { exec, calls } = execReturning({ stdout: "/repo\n", code: 0 });
+		expect(await resolveGitRoot("/repo/packages/a", exec)).toBe("/repo");
+		expect(calls).toEqual([{ command: "git", args: ROOT_ARGS, cwd: "/repo/packages/a" }]);
+	});
+
+	it("strips a trailing separator and normalizes backslashes to forward slashes", async () => {
+		const trailing = execReturning({ stdout: "/repo/\n", code: 0 });
+		expect(await resolveGitRoot("/repo/packages/a", trailing.exec)).toBe("/repo");
+		const windows = execReturning({ stdout: "C:\\work\\repo\r\n", code: 0 });
+		expect(await resolveGitRoot("C:\\work\\repo", windows.exec)).toBe("C:/work/repo");
+	});
+
+	it("keeps a root that contains spaces (a POSIX path may)", async () => {
+		const { exec } = execReturning({ stdout: "/home/u/My Repo\n", code: 0 });
+		expect(await resolveGitRoot("/home/u/My Repo/pkg", exec)).toBe("/home/u/My Repo");
+	});
+
+	it("returns undefined outside a git repository (non-zero exit)", async () => {
+		const { exec } = execReturning({ stdout: "", code: 128 });
+		expect(await resolveGitRoot("/work", exec)).toBeUndefined();
+	});
+
+	it("returns undefined for empty, whitespace-only or multi-line output", async () => {
+		for (const stdout of ["", "\n", "  \n\t", "/repo\n/other\n"]) {
+			const { exec } = execReturning({ stdout, code: 0 });
+			expect(await resolveGitRoot("/work", exec)).toBeUndefined();
+		}
+	});
+
+	it("returns undefined when exec rejects (and never throws)", async () => {
+		const { exec, calls } = execRejecting(new Error("spawn git ENOENT"));
+		await expect(resolveGitRoot("/work", exec)).resolves.toBeUndefined();
+		expect(calls).toHaveLength(1);
+	});
+
+	it("returns undefined for a malformed result instead of throwing", async () => {
+		const malformed = [
+			null,
+			undefined,
+			{ stdout: undefined, code: 0 },
+			{ stdout: "/repo\n", code: undefined },
+			{ stdout: 42, code: 0 },
+		];
+		for (const result of malformed) {
+			const exec: ExecLike = async () => result as unknown as ExecResultLike;
+			expect(await resolveGitRoot("/work", exec)).toBeUndefined();
 		}
 	});
 });

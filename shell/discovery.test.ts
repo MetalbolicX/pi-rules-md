@@ -16,7 +16,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discover, nodeDiscoveryDeps, tinyglobbyScanner } from "./discovery.ts";
+import { discover, nodeDiscoveryDeps, projectRuleDirs, tinyglobbyScanner } from "./discovery.ts";
 import type { DiscoveryDeps, DiscoveryOptions } from "./discovery.ts";
 import { normalizedPath } from "../src/types.ts";
 
@@ -83,10 +83,23 @@ const fakeDeps = (files: Map<string, FakeFile>) => {
 	return { deps, callLog };
 };
 
+/**
+ * Single-directory options (cwd == the project rules base): the shape every
+ * pre-monorepo test used, now expressed as the one-element walk-up list.
+ */
 const opts = (isProjectTrusted: boolean): DiscoveryOptions => ({
 	globalDir: GLOBAL_DIR,
-	projectDir: PROJECT_DIR,
+	projectDirs: [{ dir: PROJECT_DIR, base: "/work" }],
+	cwd: "/work",
 	isProjectTrusted,
+});
+
+/** Options for a global-only pass (adapters/production tests): no project dirs. */
+const globalOnly = (globalDir: string): DiscoveryOptions => ({
+	globalDir,
+	projectDirs: [],
+	cwd: normalizedPath(globalDir),
+	isProjectTrusted: false,
 });
 
 describe("discover — listing and parsing", () => {
@@ -520,9 +533,7 @@ describe("production adapters — real filesystem", () => {
 			const outside = join(root, "outside.md");
 			await writeFile(outside, ruleText("Outside"));
 			symlinkSync(outside, join(rules, "linked.md"));
-			const result = await discover(nodeDiscoveryDeps(), new Map(), {
-				globalDir: rules, projectDir: rules, isProjectTrusted: false,
-			});
+			const result = await discover(nodeDiscoveryDeps(), new Map(), globalOnly(rules));
 			expect(result.rules).toEqual([]);
 		} finally {
 			await rm(root, { recursive: true, force: true });
@@ -538,9 +549,7 @@ describe("production adapters — real filesystem", () => {
 			await mkdir(actual);
 			await writeFile(join(actual, "linked.md"), ruleText("Linked"));
 			symlinkSync(actual, join(rules, "alias"), "dir");
-			const result = await discover(nodeDiscoveryDeps(), new Map(), {
-				globalDir: rules, projectDir: rules, isProjectTrusted: false,
-			});
+			const result = await discover(nodeDiscoveryDeps(), new Map(), globalOnly(rules));
 			expect(result.rules).toEqual([]);
 		} finally {
 			await rm(root, { recursive: true, force: true });
@@ -557,9 +566,7 @@ describe("production adapters — real filesystem", () => {
 			await mkdir(join(rules, beyond), { recursive: true });
 			await writeFile(join(rules, boundary, "boundary.md"), ruleText("Boundary"));
 			await writeFile(join(rules, beyond, "beyond.md"), ruleText("Beyond"));
-			const result = await discover(nodeDiscoveryDeps(), new Map(), {
-				globalDir: rules, projectDir: rules, isProjectTrusted: false,
-			});
+			const result = await discover(nodeDiscoveryDeps(), new Map(), globalOnly(rules));
 			expect(result.rules.map((rule) => rule.id)).toEqual(["boundary"]);
 		} finally {
 			await rm(root, { recursive: true, force: true });
@@ -570,9 +577,7 @@ describe("production adapters — real filesystem", () => {
 		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-hidden-"));
 		try {
 			await writeFile(join(root, ".hidden.md"), ruleText("Hidden"));
-			const result = await discover(nodeDiscoveryDeps(), new Map(), {
-				globalDir: root, projectDir: root, isProjectTrusted: false,
-			});
+			const result = await discover(nodeDiscoveryDeps(), new Map(), globalOnly(root));
 			expect(result.rules).toEqual([]);
 		} finally {
 			await rm(root, { recursive: true, force: true });
@@ -593,5 +598,175 @@ describe("production adapters — real filesystem", () => {
 			expect(path.startsWith("/")).toBe(false);
 		}
 		await expect(deps.listRuleFiles(join(dir, "does-not-exist"))).resolves.toEqual([]);
+	});
+});
+
+/** Valid rule file with glob triggers (so rebasing is observable). */
+const globRuleText = (description: string, globs: readonly string[], match = "touched"): string =>
+	`---\ndescription: ${description}\nversion: 1\nglobs:\n${globs.map((glob) => `  - "${glob}"`).join("\n")}\nmatch: ${match}\n---\nBody.\n`;
+
+describe("projectRuleDirs — walk-up bound (S10)", () => {
+	it("lists cwd first, then each ancestor up to and including the git root", () => {
+		expect(projectRuleDirs("/repo/packages/a", "/repo")).toEqual([
+			{ dir: "/repo/packages/a/.pi/rules", base: "/repo/packages/a" },
+			{ dir: "/repo/packages/.pi/rules", base: "/repo/packages" },
+			{ dir: "/repo/.pi/rules", base: "/repo" },
+		]);
+	});
+
+	it("falls back to exactly today's single project dir when there is no git root", () => {
+		expect(projectRuleDirs("/work", undefined)).toEqual([{ dir: "/work/.pi/rules", base: "/work" }]);
+	});
+
+	it("collapses to one entry when cwd IS the git root", () => {
+		expect(projectRuleDirs("/repo", "/repo")).toEqual([{ dir: "/repo/.pi/rules", base: "/repo" }]);
+	});
+
+	it("never walks up when cwd is not inside the reported root", () => {
+		expect(projectRuleDirs("/other/pkg", "/repo")).toEqual([{ dir: "/other/pkg/.pi/rules", base: "/other/pkg" }]);
+	});
+
+	it("normalizes separators and a trailing root separator", () => {
+		expect(projectRuleDirs("C:\\repo\\pkg", "C:/repo/")).toEqual([
+			{ dir: "C:/repo/pkg/.pi/rules", base: "C:/repo/pkg" },
+			{ dir: "C:/repo/.pi/rules", base: "C:/repo" },
+		]);
+	});
+
+	it("handles the filesystem root as the git root without looping", () => {
+		expect(projectRuleDirs("/repo", "/")).toEqual([
+			{ dir: "/repo/.pi/rules", base: "/repo" },
+			{ dir: "/.pi/rules", base: "/" },
+		]);
+	});
+});
+
+describe("discover — monorepo walk-up (S10)", () => {
+	const REPO = "/repo";
+	const PKG = "/repo/packages/a";
+	const PKG_DIR = `${PKG}/.pi/rules`;
+	const MID_DIR = `${REPO}/packages/.pi/rules`;
+	const ROOT_DIR = `${REPO}/.pi/rules`;
+
+	const monorepoOpts = (isProjectTrusted = true): DiscoveryOptions => ({
+		globalDir: GLOBAL_DIR,
+		projectDirs: [
+			{ dir: PKG_DIR, base: PKG },
+			{ dir: MID_DIR, base: `${REPO}/packages` },
+			{ dir: ROOT_DIR, base: REPO },
+		],
+		cwd: PKG,
+		isProjectTrusted,
+	});
+
+	it("orders rules cwd-first, then each ancestor, then global", async () => {
+		const { deps, callLog } = fakeDeps(
+			seed([
+				[`${ROOT_DIR}/root.md`, file(ruleText("Root"))],
+				[`${PKG_DIR}/pkg.md`, file(ruleText("Pkg"))],
+				[`${MID_DIR}/mid.md`, file(ruleText("Mid"))],
+				[`${GLOBAL_DIR}/g.md`, file(ruleText("Global"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), monorepoOpts());
+		expect(result.rules.map((rule) => rule.id)).toEqual(["pkg", "mid", "root", "g"]);
+		expect(result.rules.map((rule) => rule.source)).toEqual(["project", "project", "project", "global"]);
+		expect(callLog.listed).toEqual([PKG_DIR, MID_DIR, ROOT_DIR, GLOBAL_DIR]);
+	});
+
+	it("keeps one id namespace across every project dir, cwd-first", async () => {
+		const { deps } = fakeDeps(
+			seed([
+				[`${ROOT_DIR}/style.md`, file(ruleText("Root style"))],
+				[`${MID_DIR}/style.md`, file(ruleText("Mid style"))],
+				[`${PKG_DIR}/style.md`, file(ruleText("Pkg style"))],
+				[`${GLOBAL_DIR}/style.md`, file(ruleText("Global style"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), monorepoOpts());
+		expect(result.rules.map((rule) => `${rule.source}:${rule.id}`)).toEqual([
+			"project:style",
+			"project:style-2",
+			"project:style-3",
+			"global:style-4",
+		]);
+	});
+
+	it("rebases ancestor globs onto the cwd scale and leaves cwd globs untouched", async () => {
+		const { deps } = fakeDeps(
+			seed([
+				[`${ROOT_DIR}/root.md`, file(globRuleText("Root", ["packages/a/src/**/*.ts", "!packages/a/src/**/*.test.ts"]))],
+				[`${PKG_DIR}/pkg.md`, file(globRuleText("Pkg", ["src/**/*.ts"]))],
+			]),
+		);
+		const result = await discover(deps, new Map(), monorepoOpts());
+		const pkg = result.rules.find((rule) => rule.id === "pkg");
+		const root = result.rules.find((rule) => rule.id === "root");
+		expect(pkg?.globs).toEqual(["src/**/*.ts"]);
+		// Ancestor rule: absolute (outside cwd) + cwd-scale (inside cwd) forms.
+		expect(root?.globs).toContain("/repo/packages/a/src/**/*.ts");
+		expect(root?.globs).toContain("src/**/*.ts");
+		expect(root?.globs).toContain("!/repo/packages/a/src/**/*.test.ts");
+		expect(root?.globs).toContain("!src/**/*.test.ts");
+	});
+
+	it("gives ancestor rules a rules-dir-relative reference path and leaves cwd rules as today", async () => {
+		const { deps } = fakeDeps(
+			seed([
+				[`${ROOT_DIR}/nested/root.md`, file(ruleText("Root"))],
+				[`${PKG_DIR}/pkg.md`, file(ruleText("Pkg"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), monorepoOpts());
+		const pkg = result.rules.find((rule) => rule.id === "pkg");
+		const root = result.rules.find((rule) => rule.id === "root");
+		// Today's shape: discovery leaves relativePath absent for the cwd dir and
+		// the pipeline derives it. Ancestor rules cannot be derived by the
+		// pipeline (it only knows cwd's rules root), so discovery names them.
+		expect(pkg?.relativePath).toBeUndefined();
+		expect(root?.relativePath).toBe(normalizedPath("nested/root.md"));
+	});
+
+	it("treats a missing ancestor rules dir as an empty contribution", async () => {
+		const { deps, callLog } = fakeDeps(seed([[`${PKG_DIR}/pkg.md`, file(ruleText("Pkg"))]]));
+		const result = await discover(deps, new Map(), monorepoOpts());
+		expect(result.rules.map((rule) => rule.id)).toEqual(["pkg"]);
+		expect(result.errors).toEqual([]);
+		expect(callLog.listed).toEqual([PKG_DIR, MID_DIR, ROOT_DIR, GLOBAL_DIR]);
+	});
+
+	it("never lists any project dir when the project is untrusted", async () => {
+		const { deps, callLog } = fakeDeps(
+			seed([
+				[`${ROOT_DIR}/root.md`, file(ruleText("Root"))],
+				[`${PKG_DIR}/pkg.md`, file(ruleText("Pkg"))],
+				[`${GLOBAL_DIR}/g.md`, file(ruleText("Global"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), monorepoOpts(false));
+		expect(result.rules.map((rule) => rule.id)).toEqual(["g"]);
+		expect(callLog.listed).toEqual([GLOBAL_DIR]);
+		expect(callLog.read).toEqual([`${GLOBAL_DIR}/g.md`]);
+	});
+
+	it("never reads a .pi/rules dir ABOVE the git root, even when one exists", async () => {
+		const above = "/.pi/rules";
+		const { deps, callLog } = fakeDeps(
+			seed([
+				[`${above}/escaped.md`, file(ruleText("Escaped"))],
+				[`${ROOT_DIR}/root.md`, file(ruleText("Root"))],
+			]),
+		);
+		const dirs = projectRuleDirs(PKG, REPO);
+		const result = await discover(deps, new Map(), {
+			globalDir: GLOBAL_DIR,
+			projectDirs: dirs,
+			cwd: PKG,
+			isProjectTrusted: true,
+		});
+		expect(dirs.every((entry) => entry.base !== "/")).toBe(true);
+		expect(result.rules.map((rule) => rule.id)).toEqual(["root"]);
+		expect(callLog.listed).not.toContain(above);
+		expect(callLog.listed).not.toContain("/.pi/rules");
 	});
 });

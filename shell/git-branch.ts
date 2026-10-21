@@ -1,6 +1,7 @@
 /**
- * Git-branch resolution seam (imperative shell): the only place the extension
- * shells out to git, kept total so the injection cycle can never break on it.
+ * Git-branch and git-root resolution seam (imperative shell): the only place
+ * the extension shells out to git, kept total so the injection cycle (and
+ * monorepo discovery) can never break on it.
  *
  * pi's `ExtensionAPI.exec` is the effect that arrives here, structurally
  * mirrored and limited to what this module consumes (verified against the
@@ -13,7 +14,20 @@
  * Detached HEAD (git answers the literal `HEAD`), a non-git directory, a
  * non-zero exit, a rejected exec, or malformed output all mean "the session
  * has no branch" — `undefined`, never a throw.
+ *
+ * Contract (S10): `resolveGitRoot` answers "the enclosing git root of cwd" the
+ * same way, through `git rev-parse --show-toplevel`. It is the ONLY bound on
+ * monorepo walk-up — discovery never reads a `.pi/rules` above this root — so
+ * every failure (not a repository, non-zero exit, rejected exec, empty or
+ * multi-line output) degrades to `undefined`, and callers then keep today's
+ * single-directory behavior. Output is separator-normalized to forward slashes
+ * with any trailing separator dropped: git reports platform paths (on Windows
+ * a drive path such as `C:/work/repo`), and the rest of this extension compares
+ * normalized POSIX-style paths. A path containing spaces is kept intact — a
+ * POSIX root may contain them; only multiple output LINES are malformed.
  */
+
+import { normalizedPath } from "../src/types.ts";
 
 /** Exec options as consumed here: the run's working directory. */
 export interface ExecOptionsLike {
@@ -36,6 +50,9 @@ export type ExecLike = (command: string, args: string[], options?: ExecOptionsLi
 /** The single argv the branch query uses. */
 const BRANCH_ARGS = ["rev-parse", "--abbrev-ref", "HEAD"];
 
+/** The single argv the enclosing-root query uses (S10 walk-up bound). */
+const ROOT_ARGS = ["rev-parse", "--show-toplevel"];
+
 /**
  * Maps one exec outcome to a branch name, or `undefined` when there is no
  * usable branch. A git refname never contains whitespace, so an answer that
@@ -57,6 +74,40 @@ const branchFromOutcome = (outcome: ExecResultLike | undefined): string | undefi
 export const resolveBranch = async (cwd: string, exec: ExecLike): Promise<string | undefined> => {
 	try {
 		return branchFromOutcome(await exec("git", [...BRANCH_ARGS], { cwd }));
+	} catch {
+		return undefined;
+	}
+};
+
+/**
+ * Normalizes one git path answer: separator-normalized, no trailing separator,
+ * or `undefined` when the answer is not exactly one non-empty line.
+ */
+const pathFromOutcome = (outcome: ExecResultLike | undefined): string | undefined => {
+	if (outcome === undefined || typeof outcome.stdout !== "string" || outcome.code !== 0) {
+		return undefined;
+	}
+	const lines = outcome.stdout
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line !== "");
+	const line = lines.length === 1 ? lines[0] : undefined;
+	if (line === undefined) {
+		return undefined;
+	}
+	const normalized = normalizedPath(line);
+	return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
+};
+
+/**
+ * Resolves the enclosing git root of `cwd` through the injected exec effect.
+ * Total: a non-git directory, a non-zero exit, a rejected exec or malformed
+ * output all degrade to `undefined`, which callers read as "no walk-up bound"
+ * and therefore as today's single-directory discovery behavior.
+ */
+export const resolveGitRoot = async (cwd: string, exec: ExecLike): Promise<string | undefined> => {
+	try {
+		return pathFromOutcome(await exec("git", [...ROOT_ARGS], { cwd }));
 	} catch {
 		return undefined;
 	}

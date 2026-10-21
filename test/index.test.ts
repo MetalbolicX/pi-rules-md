@@ -10,7 +10,7 @@
  * Record — exactly the mutation pi would see on `before_agent_start`.
  */
 import { describe, expect, it } from "vitest";
-import { createRulesExtension } from "../index.ts";
+import { createGitRootMemo, createRulesExtension, projectDirsForCycle } from "../index.ts";
 import type {
 	BeforeAgentStartLike,
 	ExtensionContextLike,
@@ -1609,5 +1609,48 @@ describe("production-shaped discovery (L7)", () => {
 		const tool = api.tools.get("read_rule");
 		const result = await tool?.execute("tool-call", { name: "reference.md" }, undefined, undefined, {} as never);
 		expect(result?.content).toEqual([{ type: "text", text: "body of reference\n" }]);
+	});
+});
+
+describe("production discovery seam — git-root walk-up (S10)", () => {
+	it("resolves the git root once per cwd through `git rev-parse --show-toplevel`", async () => {
+		const { exec, calls } = fakeExec({ stdout: "/repo\n", code: 0 });
+		const gitRootOf = createGitRootMemo(exec);
+		expect(await gitRootOf("/repo/packages/a")).toBe("/repo");
+		expect(await gitRootOf("/repo/packages/a")).toBe("/repo");
+		expect(calls).toEqual([{ command: "git", args: ["rev-parse", "--show-toplevel"], cwd: "/repo/packages/a" }]);
+	});
+
+	it("caches a negative answer too (non-git cwd), and keys the memo by cwd", async () => {
+		const { exec, calls } = fakeExec({ stdout: "", code: 128 });
+		const gitRootOf = createGitRootMemo(exec);
+		expect(await gitRootOf("/work")).toBeUndefined();
+		expect(await gitRootOf("/work")).toBeUndefined();
+		expect(calls).toHaveLength(1);
+		await gitRootOf("/other");
+		expect(calls).toHaveLength(2);
+	});
+
+	it("returns exactly today's single project dir when git has no answer", async () => {
+		const { exec } = fakeExec({ stdout: "", code: 128 });
+		const dirs = await projectDirsForCycle("/work", true, createGitRootMemo(exec));
+		expect(dirs).toEqual([{ dir: "/work/.pi/rules", base: "/work" }]);
+	});
+
+	it("returns the cwd-first walk-up to the git root, inclusive", async () => {
+		const { exec } = fakeExec({ stdout: "/repo\n", code: 0 });
+		const dirs = await projectDirsForCycle("/repo/packages/a", true, createGitRootMemo(exec));
+		expect(dirs).toEqual([
+			{ dir: "/repo/packages/a/.pi/rules", base: "/repo/packages/a" },
+			{ dir: "/repo/packages/.pi/rules", base: "/repo/packages" },
+			{ dir: "/repo/.pi/rules", base: "/repo" },
+		]);
+	});
+
+	it("never shells out to git and lists nothing when the project is untrusted", async () => {
+		const { exec, calls } = fakeExec({ stdout: "/repo\n", code: 0 });
+		const dirs = await projectDirsForCycle("/repo/packages/a", false, createGitRootMemo(exec));
+		expect(dirs).toEqual([]);
+		expect(calls).toEqual([]);
 	});
 });

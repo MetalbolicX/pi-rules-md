@@ -29,8 +29,16 @@
  * - Project rules come FIRST, then global; within a source, files are sorted
  *   by absolute normalized path. Project-first ordering lets the selection
  *   pipeline's content-tie dedupe prefer project rules.
- * - Trust gate: when the project is untrusted, the project directory is
- *   never listed, stat-ed, or read.
+ * - Monorepo walk-up (S10): the project source is the ordered `.pi/rules` list
+ *   from `<cwd>/.pi/rules` up to the git root, one pass segment per directory,
+ *   in that order — so cwd ordering/ids/bytes are exactly today's and ancestor
+ *   rules append after them. All project directories share ONE id namespace,
+ *   every project directory precedes global, and each rule's globs are relative
+ *   to the directory owning its `.pi/` folder (rebased in shell/match.ts). The
+ *   list is bounded by the caller; discovery never walks further, so a
+ *   `.pi/rules` above the git root is never read.
+ * - Trust gate: when the project is untrusted, NO project directory (cwd's or
+ *   any ancestor's) is listed, stat-ed, or read.
  * - A missing directory contributes nothing and is not an error (the
  *   production `listRuleFiles` resolves ENOENT to []); a REJECTED
  *   `listRuleFiles` is collected as one `source-unreadable` error naming the
@@ -56,6 +64,7 @@ import { parseRule } from "../src/frontmatter.ts";
 import type { GlobScanner } from "../src/match.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
 import type { NormalizedPath, Rule, RuleError, RuleSource } from "../src/types.ts";
+import { rebaseGlobs } from "./match.ts";
 
 /** Injected filesystem surface for discovery. */
 export interface DiscoveryDeps {
@@ -70,8 +79,31 @@ export interface DiscoveryDeps {
 /** Directories discovery reads from, plus the project trust gate. */
 export interface DiscoveryOptions {
 	readonly globalDir: string;
-	readonly projectDir: string;
+	/**
+	 * Project rule directories in pass order: `<cwd>/.pi/rules` first, then one
+	 * entry per ancestor up to and including the git root (see
+	 * {@link projectRuleDirs}). The list is built by the composition root and is
+	 * already bounded — discovery never extends it, so nothing above the git
+	 * root can be read. Untrusted projects pass an empty list AND are gated
+	 * below (defense in depth).
+	 */
+	readonly projectDirs: readonly ProjectRuleDir[];
 	readonly isProjectTrusted: boolean;
+	/** Working directory: the scale touched/existing paths are expressed on. */
+	readonly cwd: string;
+}
+
+/**
+ * One project rules directory plus the directory owning its `.pi` folder — the
+ * rule base its globs are relative to (S10). `<cwd>/.pi/rules` has
+ * `base === cwd`, which is exactly today's implicit base and therefore rebases
+ * nothing.
+ */
+export interface ProjectRuleDir {
+	/** Absolute normalized directory holding the rule files (the `.pi/rules` dir). */
+	readonly dir: string;
+	/** Absolute normalized directory the rules' globs are relative to. */
+	readonly base: string;
 }
 
 /** Cached outcome for one rule file, reused while its mtime is unchanged. */
@@ -106,6 +138,62 @@ const fileStem = (path: string): string => {
 /** Joins a listed (relative) name onto its directory as an absolute normalized path. */
 const resolveListed = (dir: string, listed: string): NormalizedPath => normalizedPath(`${dir}/${listed}`);
 
+/** The `.pi/rules` directory under one base, without doubling a filesystem-root separator. */
+const rulesDirUnder = (base: string): NormalizedPath =>
+	base === "/" ? normalizedPath("/.pi/rules") : normalizedPath(`${base}/.pi/rules`);
+
+/** Parent directory of a normalized absolute path (`/a/b` → `/a`, `/a` → `/`). */
+const parentOf = (path: string): string => {
+	const cut = path.lastIndexOf("/");
+	return cut <= 0 ? "/" : path.slice(0, cut);
+};
+
+/**
+ * Builds the ordered project rules directory list for one cycle (S10 walk-up
+ * half): `<cwd>/.pi/rules` FIRST — so cwd rules keep today's ordering, ids and
+ * bytes — then one entry per ancestor, ending with the git root itself.
+ *
+ * Total and bounded by construction:
+ * - no git root (not a repository, git unavailable, …) → exactly today's single
+ *   project directory, i.e. today's behavior byte for byte;
+ * - cwd outside the reported root (a stale answer, a symlinked layout) → the
+ *   single cwd directory, because walking up would read directories the bound
+ *   does not cover;
+ * - cwd IS the root → one entry.
+ *
+ * Nothing above the git root is ever produced, so no file above it can be read.
+ */
+export const projectRuleDirs = (cwd: string, gitRoot: string | undefined): readonly ProjectRuleDir[] => {
+	const start = normalizedPath(cwd).replace(/\/+$/, "") || "/";
+	if (gitRoot === undefined) {
+		return [{ dir: rulesDirUnder(start), base: start }];
+	}
+	const root = normalizedPath(gitRoot).replace(/\/+$/, "") || "/";
+	const insideRoot = start === root || start.startsWith(root === "/" ? "/" : `${root}/`);
+	if (!insideRoot) {
+		return [{ dir: rulesDirUnder(start), base: start }];
+	}
+	const dirs: ProjectRuleDir[] = [];
+	let current = start;
+	// Bounded: each step moves one segment closer to the root, the containment
+	// check stops the walk the moment a step would leave the root, and a
+	// filesystem root is its own parent.
+	for (;;) {
+		dirs.push({ dir: rulesDirUnder(current), base: current });
+		if (current === root) {
+			return dirs;
+		}
+		const parent = parentOf(current);
+		if (parent === current) {
+			return dirs;
+		}
+		current = parent;
+		if (!(current === root || current.startsWith(root === "/" ? "/" : `${root}/`))) {
+			return dirs;
+		}
+	}
+};
+
 /**
  * Resolves unique rule ids across the whole merged discovery pass: the first
  * file with a given stem — in pass order (project source first, then global;
@@ -139,6 +227,38 @@ const assignSourceIds = (paths: readonly NormalizedPath[], used: Set<string>): R
 /** True when a thrown cause is a missing-path error (production ENOENT adapter). */
 const isEnoent = (cause: unknown): boolean =>
 	typeof cause === "object" && cause !== null && "code" in cause && cause["code"] === "ENOENT";
+
+/**
+ * Applies the monorepo rule-base contract to one freshly loaded project rule
+ * (S10). Two adjustments, and ONLY for rules whose base is not cwd:
+ *
+ * - `globs` are rebased from the rule base onto the cwd/absolute scales
+ *   (shell/match.ts) so an ancestor rule matches the paths the evaluation pools
+ *   actually carry. A cwd rule (`base === cwd`) is NOT touched — `rebaseGlobs`
+ *   returns the identical array, and the whole rule object is returned as-is.
+ * - `relativePath` is derived from the rule's OWN rules directory. The pipeline
+ *   can only derive it for `<cwd>/.pi/rules` (it knows just cwd's rules root),
+ *   so an ancestor on-demand rule would otherwise be indexed with no fetchable
+ *   reference and `read_rule` would answer "Unknown rule". Cwd rules keep
+ *   today's shape: absent here, derived by the pipeline exactly as before, so
+ *   their bytes do not move.
+ */
+const finalizeProjectRule = (rule: Rule, entry: ProjectRuleDir, cwd: string): Rule => {
+	if (normalizedPath(entry.base) === normalizedPath(cwd) && rule.relativePath === undefined) {
+		return rule;
+	}
+	const globs = rule.globs === undefined ? undefined : rebaseGlobs(rule.globs, entry.base, cwd);
+	const prefix = `${entry.dir}/`;
+	const derived = rule.relativePath ?? (rule.path.startsWith(prefix) ? normalizedPath(rule.path.slice(prefix.length)) : undefined);
+	if (globs === rule.globs && derived === rule.relativePath) {
+		return rule;
+	}
+	return {
+		...rule,
+		...(globs === undefined ? {} : { globs }),
+		...(derived === undefined ? {} : { relativePath: derived }),
+	};
+};
 
 /**
  * Outcome of loading one listed rule file: a rule, a collected parse error,
@@ -237,6 +357,15 @@ const loadRule = async (
  * directories. Pure orchestration over the injected deps: the input cache
  * is never mutated, and the fresh next cache covers exactly the files still
  * listed. Callers start with an empty cache (`new Map()`).
+ *
+ * Monorepo walk-up (S10): every project directory in `opts.projectDirs` is one
+ * pass segment, in the caller's order (cwd first, then ancestors up to the git
+ * root). All of them contribute `source: "project"`, all of them share ONE id
+ * namespace (so the stem+suffix contract holds across directories), and all of
+ * them come before global. Ancestor rules have their globs rebased onto the
+ * cwd scale (shell/match.ts) and get the rules-dir-relative `relativePath` the
+ * pipeline can only derive for cwd rules; a rule whose base IS cwd is returned
+ * untouched, so today's single-directory output is byte-identical.
  */
 export const discover = async (
 	deps: DiscoveryDeps,
@@ -244,20 +373,15 @@ export const discover = async (
 	opts: DiscoveryOptions,
 ): Promise<DiscoveryResult> => {
 	// Project first so the selection pipeline's content-tie dedupe prefers
-	// project rules; the trust gate drops the project source entirely.
-	const sources: ReadonlyArray<readonly [dir: string, source: RuleSource]> = opts.isProjectTrusted
-		? [
-				[opts.projectDir, "project"],
-				[opts.globalDir, "global"],
-			]
-		: [[opts.globalDir, "global"]];
+	// project rules; the trust gate drops every project source at once.
+	const projectDirs: readonly ProjectRuleDir[] = opts.isProjectTrusted ? opts.projectDirs : [];
 
 	const rules: Rule[] = [];
 	const errors: RuleError[] = [];
 	const nextCache = new Map<NormalizedPath, DiscoveryCacheEntry>();
 	// Shared across the merged pass so ids stay unique project-wide + global-wide.
 	const usedIds = new Set<string>();
-	for (const [dir, source] of sources) {
+	const loadSource = async (dir: string, source: RuleSource, entry: ProjectRuleDir | undefined): Promise<void> => {
 		let listed: readonly string[];
 		try {
 			listed = await deps.listRuleFiles(dir);
@@ -269,7 +393,7 @@ export const discover = async (
 				message: `failed to list rules source: ${cause instanceof Error ? cause.message : String(cause)}`,
 				file: dir,
 			});
-			continue;
+			return;
 		}
 		const paths = listed.map((name) => resolveListed(dir, name)).filter(isRuleFile).sort();
 		const ids = assignSourceIds(paths, usedIds);
@@ -277,12 +401,16 @@ export const discover = async (
 			const id = ids.get(abs) ?? fileStem(abs);
 			const loaded = await loadRule(deps, cache, nextCache, abs, source, id);
 			if (loaded.kind === "rule") {
-				rules.push(loaded.rule);
+				rules.push(entry === undefined ? loaded.rule : finalizeProjectRule(loaded.rule, entry, opts.cwd));
 			} else if (loaded.kind === "error") {
 				errors.push(loaded.error);
 			}
 		}
+	};
+	for (const entry of projectDirs) {
+		await loadSource(entry.dir, "project", entry);
 	}
+	await loadSource(opts.globalDir, "global", undefined);
 	return { rules, errors, cache: nextCache };
 };
 

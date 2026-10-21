@@ -48,16 +48,17 @@ import { homedir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { piEventToStateEvents } from "./shell/collectors.ts";
 import type { PiEventShape } from "./shell/collectors.ts";
-import { discover as discoverRules, nodeDiscoveryDeps, tinyglobbyScanner } from "./shell/discovery.ts";
-import type { DiscoveryCacheEntry, DiscoveryDeps } from "./shell/discovery.ts";
+import { discover as discoverRules, nodeDiscoveryDeps, projectRuleDirs, tinyglobbyScanner } from "./shell/discovery.ts";
+import type { DiscoveryCacheEntry, DiscoveryDeps, ProjectRuleDir } from "./shell/discovery.ts";
 import { applyInjection, removeInjection } from "./shell/injection.ts";
-import { resolveBranch } from "./shell/git-branch.ts";
+import { resolveBranch, resolveGitRoot } from "./shell/git-branch.ts";
 import type { ExecLike } from "./shell/git-branch.ts";
+import { createScopedScanner } from "./shell/match.ts";
 import { createReadRuleTool } from "./shell/read-rule.ts";
 import type { ReadRuleToolDefinition } from "./shell/read-rule.ts";
 import { createCachedScanner } from "./shell/scan-cache.ts";
 import { DEFAULT_BUDGET_TOKENS, evaluateCurrent, renderTraceReport, runInjectionCycle } from "./shell/pipeline.ts";
-import { globalRulesDir, projectRulesDir, resolveAttach, resolveBudget } from "./shell/rules-paths.ts";
+import { globalRulesDir, resolveAttach, resolveBudget } from "./shell/rules-paths.ts";
 import type { PipelineDeps } from "./shell/pipeline.ts";
 import { newlyActivated, remainingBudget, renderAttachments } from "./src/attach.ts";
 import { TOUCHED_ENTRY_TYPE, addedPaths, initialState, touchedPathsFromEntries, transition } from "./src/state.ts";
@@ -447,21 +448,65 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 	};
 };
 
+/**
+ * Per-cwd memo around `resolveGitRoot` (S10). The root of a directory does not
+ * change while a session runs, and the discovery seam is called once per cycle
+ * (twice when a tool result attaches rules), so the git query must not repeat:
+ * one exec per cwd for the life of the extension, negative answers included.
+ * The memo is keyed by the cwd string exactly as pi reports it.
+ */
+export const createGitRootMemo = (exec: ExecLike): ((cwd: string) => Promise<string | undefined>) => {
+	const resolved = new Map<string, string | undefined>();
+	return async (cwd) => {
+		if (resolved.has(cwd)) {
+			return resolved.get(cwd);
+		}
+		const root = await resolveGitRoot(cwd, exec);
+		resolved.set(cwd, root);
+		return root;
+	};
+};
+
+/**
+ * The project rules directories one cycle may read (S10), built at the
+ * composition root:
+ *
+ * - Trust gate first: an untrusted project yields NO directories and never
+ *   reaches git — an untrusted tree is not stat-ed, listed OR queried, which
+ *   matches discovery's own gate.
+ * - Trusted: the cwd-first walk-up list to the enclosing git root (inclusive),
+ *   or exactly today's single `<cwd>/.pi/rules` when git reports no root.
+ *   Nothing above that root can be produced, so nothing above it can be read.
+ */
+export const projectDirsForCycle = async (
+	cwd: string,
+	trusted: boolean,
+	gitRootOf: (cwd: string) => Promise<string | undefined>,
+): Promise<readonly ProjectRuleDir[]> => (trusted ? projectRuleDirs(cwd, await gitRootOf(cwd)) : []);
+
 /** The real extension factory: production discovery, exists-scan cache, budget, clock. */
 export default function piRulesMd(pi: ExtensionAPI): void {
 	const discoveryDeps: DiscoveryDeps = nodeDiscoveryDeps();
 	const cache: Map<NormalizedPath, DiscoveryCacheEntry> = new Map();
-	// Exists-scan cache (S8): the composition root owns the scanner, so it owns
-	// the memo around it and hands the wiring the matching `invalidate` effect.
-	const scanCache = createCachedScanner(tinyglobbyScanner);
+	// Exists-scan cache (S8) around the rebasing scanner (S10): rebased ancestor
+	// globs are ABSOLUTE, so they must be scanned at their own root and returned
+	// absolute; the memo stays OUTERMOST so its (cwd, pattern set) key includes
+	// the rebased patterns themselves — a rule base change is a different
+	// question, never a stale hit.
+	const scanCache = createCachedScanner(createScopedScanner(tinyglobbyScanner));
+	// One git-root query per cwd (see createGitRootMemo), shared by every cycle.
+	const gitRootOf = createGitRootMemo((command, args, options) => pi.exec(command, args, options));
 	const deps: ExtensionDeps = {
 		pipeline: {
 			discover: async (opts) => {
-				// Adjudicated dirs (parent-pinned, T13): global `~/.pi/agent/rules`, project `<cwd>/.pi/rules`.
+				// Adjudicated dirs (parent-pinned, T13): global `~/.pi/agent/rules`, project
+				// rules from every `.pi/rules` between cwd and the git root (S10).
+				const projectDirs = await projectDirsForCycle(opts.cwd, opts.isProjectTrusted, gitRootOf);
 				const result = await discoverRules(discoveryDeps, cache, {
 					globalDir: globalRulesDir(homedir()),
-					projectDir: projectRulesDir(opts.cwd),
+					projectDirs,
 					isProjectTrusted: opts.isProjectTrusted,
+					cwd: opts.cwd,
 				});
 				return { rules: result.rules, errors: result.errors };
 			},
