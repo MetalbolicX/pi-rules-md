@@ -58,6 +58,32 @@ const ruleWith = (fields: {
 	content: fields.content ?? `body of ${fields.id ?? "always-on"}\n`,
 });
 
+/**
+ * A rule exactly as `shell/discovery.ts` hands it to the pipeline: no
+ * `relativePath`, no `index`. The pipeline materializes both, and the wiring
+ * must expose that enriched list (L7) or `read_rule` answers "Unknown rule".
+ */
+const discoveredRule = (fields: {
+	readonly id: string;
+	readonly globs?: readonly string[];
+	readonly alwaysApply?: boolean;
+	readonly content?: string;
+	readonly load?: "pinned" | "on-demand";
+}): Rule => ({
+	load: fields.load ?? "pinned",
+	id: ruleId(fields.id),
+	path: normalizedPath(`/work/.pi/rules/${fields.id}.md`),
+	source: "project",
+	description: `test rule ${fields.id}`,
+	...(fields.globs === undefined ? {} : { globs: fields.globs }),
+	match: "touched",
+	priority: 0,
+	enforcement: "inform",
+	alwaysApply: fields.alwaysApply ?? true,
+	version: 1,
+	content: fields.content ?? `body of ${fields.id}\n`,
+});
+
 /** Fake handler context: cwd + trust + model id + ui surface + an empty session branch. */
 const handlerCtx = (cwd: string, trusted = true, model?: string): ExtensionContextLike => ({
 	cwd,
@@ -154,6 +180,66 @@ const toolResult = (toolName: string, path?: string): PiEventShape => ({
 	input: path === undefined ? {} : { path },
 });
 
+/**
+ * Production-shaped tool result (pi 1.3.0 `ToolResultEventBase`,
+ * `dist/core/extensions/types.d.ts:985-1005`): pi always supplies `content`
+ * parts and `isError`, which the mid-run attachment handler consumes.
+ */
+const toolResultWith = (fields: {
+	readonly toolName: string;
+	readonly text?: string;
+	readonly isError?: boolean;
+}): PiEventShape => ({
+	type: "tool_result",
+	toolCallId: "call-1",
+	toolName: fields.toolName,
+	input: { path: "/work/src/a.ts" },
+	content: [{ type: "text", text: fields.text ?? "file body" }],
+	isError: fields.isError ?? false,
+});
+
+/**
+ * Invokes every captured `tool_result` handler and returns the last non-undefined
+ * return value: pi 1.3.0 composes `tool_result` handlers by RESULT
+ * (`dist/core/extensions/runner.js: emitToolResult`), so a returned
+ * `{ content }` replaces the result content. Nothing is returned when no
+ * handler wants to change the result.
+ */
+const emitToolResult = async (
+	api: ReturnType<typeof fakeApi>,
+	event: PiEventShape,
+	ctx: ExtensionContextLike,
+): Promise<unknown> => {
+	let patched: unknown;
+	for (const handler of api.signals.get("tool_result") ?? []) {
+		const returned = await handler(event, ctx);
+		if (returned !== undefined) {
+			patched = returned;
+		}
+	}
+	return patched;
+};
+
+/** Content parts of a returned tool_result patch, or `[]` when nothing was patched. */
+const patchedParts = (patched: unknown): readonly unknown[] => {
+	if (patched === null || typeof patched !== "object") {
+		return [];
+	}
+	const { content } = patched as { readonly content?: unknown };
+	return Array.isArray(content) ? content : [];
+};
+
+/** Text of the single part an attachment patch appends, or `undefined` when it appended none. */
+const appendedText = (patched: unknown): string | undefined => {
+	const parts = patchedParts(patched);
+	const last = parts.at(-1);
+	if (last === null || typeof last !== "object") {
+		return undefined;
+	}
+	const { type, text } = last as { readonly type?: unknown; readonly text?: unknown };
+	return type === "text" && typeof text === "string" ? text : undefined;
+};
+
 /** One recorded underlying scan invocation. */
 interface ScanCall {
 	readonly patterns: readonly string[];
@@ -189,12 +275,18 @@ const depsWithScan = (opts: {
 		},
 		now: () => NOW,
 		invalidateScan: cache.invalidate,
+		attach: true,
 	};
 	return { deps, files, scanCalls };
 };
 
 /** Faked ExtensionDeps: discover yields the given rules/errors, scan nothing. */
-const depsWith = (opts: { readonly rules: readonly Rule[]; readonly errors?: readonly RuleError[]; readonly budget?: number }): {
+const depsWith = (opts: {
+	readonly rules: readonly Rule[];
+	readonly errors?: readonly RuleError[];
+	readonly budget?: number;
+	readonly attach?: boolean;
+}): {
 	readonly deps: ExtensionDeps;
 	readonly discoverCalls: DiscoverOptions[];
 	readonly invalidations: () => number;
@@ -215,6 +307,7 @@ const depsWith = (opts: { readonly rules: readonly Rule[]; readonly errors?: rea
 		invalidateScan: () => {
 			invalidationCount += 1;
 		},
+		attach: opts.attach ?? true,
 	};
 	return { deps, discoverCalls, invalidations: () => invalidationCount };
 };
@@ -1199,5 +1292,322 @@ describe("exists-scan cache (S8)", () => {
 		await emitStart(api, ctx, sections);
 		expect(sections).not.toHaveProperty("pi-rules-md");
 		expect(await invokeRules(api)).toContain("inactive: touched-rule");
+	});
+});
+
+describe("mid-run attachment (S9)", () => {
+	const referenceRule = (): Rule => ruleWith({ id: "python-style", load: "on-demand" });
+	const referenceLine = "- python-style.md — test rule python-style (fetch with the read_rule tool)";
+
+	/** Wires the extension over the given rules and runs one cycle, so a trace exists. */
+	const wired = async (rules: readonly Rule[]): Promise<{ api: ReturnType<typeof fakeApi>; ctx: ExtensionContextLike }> => {
+		const { deps } = depsWith({ rules });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+		await emitStart(api, ctx);
+		return { api, ctx };
+	};
+
+	it("appends the newly activated rules to the first read result and never to a second", async () => {
+		const { api, ctx } = await wired([referenceRule()]);
+
+		const first = await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx);
+		expect(appendedText(first)).toContain("## Rules newly activated by this tool result");
+		expect(appendedText(first)).toContain(referenceLine);
+		// The result content is APPENDED to: the original parts stay in place and
+		// exactly one text part is added after them (never replaced).
+		expect(patchedParts(first)).toHaveLength(2);
+		expect(patchedParts(first)[0]).toEqual({ type: "text", text: "file body" });
+		expect(patchedParts(first)[1]).toEqual({ type: "text", text: appendedText(first) });
+
+		// Delivered once: the same rule is in the session delivered set now.
+		expect(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx)).toBeUndefined();
+	});
+
+	it("attaches to edit and to write results as well", async () => {
+		for (const toolName of ["edit", "write"]) {
+			const { api, ctx } = await wired([referenceRule()]);
+			const patched = await emitToolResult(api, toolResultWith({ toolName }), ctx);
+			expect(appendedText(patched), toolName).toContain(referenceLine);
+		}
+	});
+
+	it("leaves results of tools that attach nothing untouched", async () => {
+		for (const toolName of ["grep", "find", "ls", "bash", "custom"]) {
+			const { api, ctx } = await wired([referenceRule()]);
+			expect(await emitToolResult(api, toolResultWith({ toolName }), ctx), toolName).toBeUndefined();
+		}
+	});
+
+	it("leaves an errored tool result untouched and delivers nothing from it", async () => {
+		const { api, ctx } = await wired([referenceRule()]);
+
+		// pi marks a failed call with `isError: true` (`ToolResultEventBase.isError`,
+		// types.d.ts:999): the result is not evidence of anything, so it is left
+		// byte-identical and nothing is marked delivered.
+		expect(await emitToolResult(api, toolResultWith({ toolName: "read", isError: true }), ctx)).toBeUndefined();
+
+		// Proof that nothing was marked delivered: the next good result still attaches.
+		expect(appendedText(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx))).toContain(referenceLine);
+	});
+
+	it("does not attach a pinned rule the last cycle already delivered in the section", async () => {
+		// The cycle patched the section with this rule, so it is seeded into the
+		// delivered set: a rule delivered in the current section is never re-attached.
+		const { api, ctx } = await wired([ruleWith({ id: "always-on" })]);
+
+		expect(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx)).toBeUndefined();
+
+		// And the delivered set is what excludes it: after a compaction clears the
+		// set, the same rule is a candidate again (the next cycle re-seeds it).
+		await emitSignal(api, { type: "session_compact" }, ctx);
+		await emitStart(api, ctx);
+		expect(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx)).toBeUndefined();
+	});
+
+	it("re-evaluates the session at the tool result: a rule activated by the mid-run touch attaches its pinned body", async () => {
+		// The headline S9 scenario. `before_agent_start` fires once per run, so its
+		// trace predates the touch folded by `tool_execution_start`; the handler
+		// therefore evaluates CURRENT session state, and the rule that this tool
+		// result just made active is delivered with the result that triggered it.
+		const rule = ruleWith({
+			id: "touched-rule",
+			globs: ["src/**/*.ts"],
+			match: "touched",
+			alwaysApply: false,
+			content: "Use tabs in TS sources.\n",
+		});
+		const { deps, discoverCalls } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		// Cycle with nothing touched yet: the glob rule is inactive, no section.
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections).not.toHaveProperty("pi-rules-md");
+
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		const patched = await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx);
+
+		const text = appendedText(patched);
+		expect(text).toContain("## Rules newly activated by this tool result");
+		expect(text).toContain("## test rule touched-rule");
+		expect(text).toContain("> Triggered by: glob `src/**/*.ts`");
+		expect(text).toContain("Use tabs in TS sources.");
+		// One discovery for the cycle plus one for the re-evaluation at the result.
+		expect(discoverCalls).toHaveLength(2);
+
+		// The rule also reaches the model through the next section, unchanged.
+		await emitStart(api, ctx, sections);
+		expect(sections["pi-rules-md"]).toContain("Use tabs in TS sources.");
+	});
+
+	it("degrades a newly activated pinned rule to a reference line when the remaining budget is spent", async () => {
+		// 40-char bodies are 10 estimated tokens each; with a 20-token budget both
+		// fit the fresh selection, which leaves zero remaining budget for the
+		// attachment, so the newly active rule degrades to its fetchable reference.
+		const alreadyActive = ruleWith({ id: "a-rule", content: "x".repeat(40) });
+		const newlyActive = ruleWith({
+			id: "b-rule",
+			globs: ["src/**/*.ts"],
+			match: "touched",
+			alwaysApply: false,
+			content: "y".repeat(40),
+		});
+		const { deps } = depsWith({ rules: [alreadyActive, newlyActive], budget: 20 });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitStart(api, ctx);
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		const text = appendedText(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx));
+
+		expect(text).toContain("- b-rule.md — test rule b-rule (fetch with the read_rule tool)");
+		expect(text).not.toContain("y".repeat(40));
+		// A degraded reference is still delivery: the rule is not attached again.
+		expect(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx)).toBeUndefined();
+	});
+
+	it("does not fold injection state from the tool-result evaluation", async () => {
+		// The re-evaluation must not touch the section lifecycle: it renders a trace,
+		// it never patches or removes. If it folded a decision, the last-injected hash
+		// would be cleared here (this evaluation sees no rules at all) and the stale
+		// section would survive the next cycle instead of being removed.
+		const rules: Rule[] = [ruleWith({ id: "always-on" })];
+		const { deps, discoverCalls } = depsWith({ rules });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections["pi-rules-md"]).toContain("test rule always-on");
+
+		// Discovery stops finding rules between the cycle and the tool result.
+		rules.length = 0;
+		expect(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx)).toBeUndefined();
+		expect(discoverCalls).toHaveLength(2);
+
+		// The hash survived, so the next cycle decides `remove` and the section goes.
+		sections["pi-rules-md"] = "STALE";
+		await emitStart(api, ctx, sections);
+		expect(sections).not.toHaveProperty("pi-rules-md");
+	});
+
+	it("keeps /rules reporting the last before_agent_start cycle", async () => {
+		const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitStart(api, ctx);
+		const before = await invokeRules(api);
+		expect(before).toContain("inactive: touched-rule");
+
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		expect(appendedText(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx))).toContain(
+			"## test rule touched-rule",
+		);
+
+		// The attachment knew about the rule, but /rules still shows the reported
+		// cycle: the tool-result trace is not promoted to the last trace.
+		expect(await invokeRules(api)).toBe(before);
+	});
+
+	it("attaches nothing before the first cycle ran (no session facts yet)", async () => {
+		const { deps } = depsWith({ rules: [referenceRule()] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+
+		expect(await emitToolResult(api, toolResultWith({ toolName: "read" }), handlerCtx("/work"))).toBeUndefined();
+	});
+
+	it("attaches nothing when PI_RULES_ATTACH=off, while scan invalidation still runs", async () => {
+		const { deps, invalidations } = depsWith({ rules: [referenceRule()], attach: false });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+		await emitStart(api, ctx);
+
+		expect(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx)).toBeUndefined();
+		expect(await emitToolResult(api, toolResultWith({ toolName: "write" }), ctx)).toBeUndefined();
+		expect(invalidations()).toBe(1);
+	});
+
+	it("re-allows delivery after a compaction clears the delivered set", async () => {
+		const { api, ctx } = await wired([referenceRule()]);
+		expect(appendedText(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx))).toContain(referenceLine);
+
+		await emitSignal(api, { type: "session_compact" }, ctx);
+		await emitStart(api, ctx);
+		expect(appendedText(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx))).toContain(referenceLine);
+	});
+
+	it("clears the delivered set on session switch and fork", async () => {
+		for (const resetEvent of [{ type: "session_before_switch" }, { type: "session_before_fork" }] as const) {
+			const { api, ctx } = await wired([referenceRule()]);
+			expect(appendedText(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx))).toContain(referenceLine);
+
+			await emitSignal(api, resetEvent, ctx);
+			await emitStart(api, ctx);
+			expect(appendedText(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx)), resetEvent.type).toContain(
+				referenceLine,
+			);
+		}
+	});
+
+	it("is total on malformed tool result shapes", async () => {
+		const { api, ctx } = await wired([referenceRule()]);
+
+		const malformed = [
+			// No content parts at all: nothing to append to, so nothing happens.
+			{ type: "tool_result", toolCallId: "call-1", toolName: "read", isError: false },
+			// Content that is not a parts array is not a result this handler can extend.
+			{ type: "tool_result", toolCallId: "call-1", toolName: "read", content: "not-a-parts-array", isError: false },
+			// No tool name: the tool filter cannot match, so no attachment.
+			{ type: "tool_result", toolCallId: "call-1", content: [{ type: "text", text: "x" }] },
+			// A throwing property accessor must not escape the handler.
+			Object.defineProperty({ type: "tool_result", toolCallId: "call-1", toolName: "read", isError: false }, "content", {
+				get: () => {
+					throw new Error("hostile getter");
+				},
+			}),
+			// Foreign runtime shapes.
+			null,
+		] as unknown as readonly PiEventShape[];
+
+		for (const event of malformed) {
+			await expect(emitToolResult(api, event, ctx)).resolves.toBeUndefined();
+		}
+	});
+
+	it("keeps session entries and the /rules report unaffected by an attachment", async () => {
+		const rule = ruleWith({ id: "python-style", load: "on-demand" });
+		const { deps, invalidations } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+		await emitStart(api, ctx);
+		const report = await invokeRules(api);
+
+		// A completed tool call is still not a touch batch: no entry, no report change.
+		expect(appendedText(await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx))).toContain(referenceLine);
+		expect(api.entries).toEqual([]);
+		expect(await invokeRules(api)).toBe(report);
+		expect(invalidations()).toBe(0);
+
+		// A write result attaches and still invalidates the exists-scan cache (S8).
+		expect(appendedText(await emitToolResult(api, toolResultWith({ toolName: "write" }), ctx))).toBeUndefined();
+		expect(invalidations()).toBe(1);
+	});
+});
+
+describe("production-shaped discovery (L7)", () => {
+	it("read_rule resolves a rule discovered without a relativePath", async () => {
+		const rule = discoveredRule({ id: "python/style", content: "Use explicit names." });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		await emitStart(api, handlerCtx("/work"));
+
+		const tool = api.tools.get("read_rule");
+		const result = await tool?.execute("tool-call", { name: "python/style.md" }, undefined, undefined, {} as never);
+		expect(result?.content).toEqual([{ type: "text", text: "Use explicit names." }]);
+	});
+
+	it("exposes the enriched rules to /rules show", async () => {
+		const rule = discoveredRule({ id: "ts-rule", globs: ["src/**/*.ts"], alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		await emitStart(api, handlerCtx("/work"));
+
+		const out = await invokeRules(api, "show ts-rule");
+		expect(out).toContain("path: /work/.pi/rules/ts-rule.md");
+		expect(out).toContain("body of ts-rule");
+	});
+
+	it("attaches the index line of an on-demand rule discovered without a relativePath", async () => {
+		// The attachment renderer needs `relativePath` to build a fetchable
+		// reference; a production-shaped discovery result only carries it after the
+		// pipeline enriches it, so this pins the L7 fix at the wiring seam.
+		const reference = discoveredRule({ id: "reference", load: "on-demand" });
+		const { deps } = depsWith({ rules: [reference] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+		await emitStart(api, ctx);
+
+		const patched = await emitToolResult(api, toolResultWith({ toolName: "read" }), ctx);
+		expect(appendedText(patched)).toContain("- reference.md — test rule reference (fetch with the read_rule tool)");
+
+		// The delivered reference is fetchable through the same enriched list.
+		const tool = api.tools.get("read_rule");
+		const result = await tool?.execute("tool-call", { name: "reference.md" }, undefined, undefined, {} as never);
+		expect(result?.content).toEqual([{ type: "text", text: "body of reference\n" }]);
 	});
 });

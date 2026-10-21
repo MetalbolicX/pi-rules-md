@@ -29,12 +29,10 @@ Functional core / imperative shell; pure functions and data, no classes.
    re-applied every turn while rules are active; identical content produces no
    prompt diff, and the section is removed when nothing is active.
 
-Mid-run delivery is being built on top of that section: rules that only become
+Mid-run delivery is built on top of that section: rules that only become
 active because of a `read`/`edit`/`write` result are appended to that tool
-result, once per rule per session. The pure core (which rules are new, the
-remaining budget, the attachment block) is specified in
-[RULE-SPEC.md §6](RULE-SPEC.md#mid-run-attachment-core); the event wiring is
-still pending.
+result, once per rule per session — see
+[Mid-run attachment](#mid-run-attachment).
 
 The complete rule-file contract is specified in [RULE-SPEC.md](RULE-SPEC.md).
 
@@ -185,6 +183,34 @@ to an uncached scan, and `.gitignore` handling is unchanged — caching only
 avoids repeating the same read. The full contract, including the staleness
 window for changes made outside the agent, is in
 [RULE-SPEC.md §5](RULE-SPEC.md#exists-scan-cache).
+
+## Mid-run attachment
+
+Rules can also reach the model between turns: the extension appends one small
+block to a `read`, `edit`, or `write` tool result.
+
+- Only those three tool results attach; every other result — including an
+errored one — is left exactly as pi produced it.
+- Each rule is delivered once per session. The ids the injected section already
+carries count as delivered, so nothing is sent twice; the record is cleared by
+compaction and by a session switch/fork, which is what allows a rule to reach
+the model again after the transcript it was part of is gone.
+- The block is rendered by the same code as the section, so a rule reads
+identically in both places. It is appended as one extra content part; the tool
+output pi produced is never replaced.
+- Attachment evaluates the session as it stands at the tool result, so the rules
+  that just became active — including because of the path this call touched — are
+  the ones delivered. The remaining budget is what the section's own pinned
+  bodies leave over, so a newly active rule can degrade to a `read_rule`
+  reference instead of its body.
+- That evaluation only reads: it never rewrites the injected section (that stays
+  `before_agent_start`'s job), and `/rules` keeps reporting the last real cycle.
+
+Attachment is on by default. Set `PI_RULES_ATTACH=off` to disable it — the
+exists-scan invalidation and the section injection are unaffected. The full
+contract (candidates, remaining budget, degradation to a `read_rule` reference,
+on-demand index lines) is in
+[RULE-SPEC.md §6](RULE-SPEC.md#mid-run-attachment).
 
 ## Session persistence
 

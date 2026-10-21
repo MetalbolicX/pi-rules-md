@@ -20,7 +20,9 @@ import type { NormalizedPath } from "./types.ts";
  * paths the agent touched (deduped, first-seen order), the content hash of
  * the last injected section (records that a section was injected; an
  * unchanged active set re-applies byte-identical content, producing no
- * system-prompt diff), and the rule ids the user muted for this session.
+ * system-prompt diff), the rule ids the user muted for this session, and the
+ * rule ids already delivered to the model this session (the section's actives
+ * plus every mid-run attachment, so nothing is delivered twice).
  */
 export interface SessionState {
 	/** Paths touched so far this session, first-seen order, exact-string deduped; replaced by a session-branch rebuild. */
@@ -29,15 +31,25 @@ export interface SessionState {
 	readonly lastInjectedHash: string | undefined;
 	/** Rule ids muted for this session, first-mute order, exact-string deduped. */
 	readonly mutedRuleIds: readonly string[];
+	/**
+	 * Rule ids already delivered to the model this session (S9), first-delivery
+	 * order, exact-string deduped: the rules the injected section carried as bodies
+	 * plus every id a mid-run attachment batch delivered. A rule in this set is
+	 * never attached again. Cleared by compaction (the transcript the model carries
+	 * is gone) and by a session switch/fork (new session).
+	 */
+	readonly deliveredRuleIds: readonly string[];
 }
 
 /**
  * Session-relevant state events, distilled from pi lifecycle and tool events
  * by the collectors (paths_touched, session_*) plus outcomes emitted by the
  * shell wiring (`touched_paths_rebuilt` from the session-branch rebuild,
- * block_injected, block_removed, and the `/rules mute`/`unmute` command folding
- * rules_muted/rules_unmuted). The union is open at runtime: unknown kinds (a
- * future pi version) must fall through to a no-op, not an error.
+ * block_injected, block_removed, the /rules mute/unmute command folding
+ * rules_muted/rules_unmuted, and `rules_delivered` for the rules the section
+ * and the mid-run attachment already handed to the model). The union is open
+ * at runtime: unknown kinds (a future pi version) must fall through to a
+ * no-op, not an error.
  */
 export type StateEvent =
 	| { readonly type: "paths_touched"; readonly paths: readonly NormalizedPath[] }
@@ -47,11 +59,18 @@ export type StateEvent =
 	| { readonly type: "block_removed" }
 	| { readonly type: "rules_muted"; readonly ruleId: string }
 	| { readonly type: "rules_unmuted"; readonly ruleId: string }
+	/** Adds rule ids to the delivered set (S9): dedup, first-delivery order kept. */
+	| { readonly type: "rules_delivered"; readonly ruleIds: readonly string[] }
 	| { readonly type: "session_compact" }
 	| { readonly type: "session_reset" };
 
 /** The state a session starts (and restarts, after switch/fork) in. */
-export const initialState: SessionState = { touchedPaths: [], lastInjectedHash: undefined, mutedRuleIds: [] };
+export const initialState: SessionState = {
+	touchedPaths: [],
+	lastInjectedHash: undefined,
+	mutedRuleIds: [],
+	deliveredRuleIds: [],
+};
 
 /**
  * `customType` of the session entries this extension appends for touched paths.
@@ -192,13 +211,28 @@ export const transition = (state: SessionState, event: StateEvent): SessionState
 			const remaining = state.mutedRuleIds.filter((id) => id !== event.ruleId);
 			return remaining.length === state.mutedRuleIds.length ? state : { ...state, mutedRuleIds: remaining };
 		}
+		case "rules_delivered": {
+			// S9 delivered set: ids already handed to the model this session. Same-reference
+			// no-op when nothing is new, so a repeated delivery fold writes nothing.
+			const seen = new Set<string>(state.deliveredRuleIds);
+			const fresh: string[] = [];
+			for (const id of event.ruleIds) {
+				if (!seen.has(id)) {
+					seen.add(id);
+					fresh.push(id);
+				}
+			}
+			return fresh.length === 0 ? state : { ...state, deliveredRuleIds: [...state.deliveredRuleIds, ...fresh] };
+		}
 		case "session_compact":
 			// Keep touched paths and session mutes: post-compact re-injection is the
-			// point, and compaction is not a session switch.
-			return { ...state, lastInjectedHash: undefined };
+			// point, and compaction is not a session switch. The delivered set is
+			// CLEARED (S9): compaction drops what the model had in its transcript, so a
+			// rule may legitimately reach it again through the re-injected section.
+			return { ...state, lastInjectedHash: undefined, deliveredRuleIds: [] };
 		case "session_reset":
-			// Session switch/fork: drop everything (touched paths, hash, mutes),
-			// back to the initial state.
+			// Session switch/fork: drop everything (touched paths, hash, mutes,
+			// delivered set), back to the initial state.
 			return initialState;
 		default:
 			// Forward compatibility: unknown event kinds are a no-op, never an

@@ -33,9 +33,16 @@
  *   consumes only `getBranch`.
  * - `on("tool_result", …)` is an `ExtensionHandler<ToolResultEvent, …>`
  *   (`dist/core/extensions/types.d.ts:1225` for the subscription;
- *   `ToolResultEventBase` at `:985-1005`, union at `:1037`). Only `toolName` is
- *   consumed: a `write`/`edit`/`bash` result can change the filesystem, so it
- *   invalidates the exists-scan cache (S8). Nothing about a result is folded.
+ *   `ToolResultEventBase` at `:985-1005`, union at `:1037`). Two effects ride on
+ *   it: a `write`/`edit`/`bash` result can change the filesystem, so it
+ *   invalidates the exists-scan cache (S8); and a `read`/`edit`/`write` result
+ *   carries the rules that only became active because of it, appended as one
+ *   extra text part (S9). The SDK documents `tool_result` as a transform event
+ *   ("Fired after a tool executes. Can modify result.") and its result type
+ *   `ToolResultEventResult` (`:1114`) replaces `content`, which
+ *   `runner.js emitToolResult` applies only when a handler RETURNS it — so this
+ *   wiring returns `{ content: [...existing, attachment] }` and never mutates
+ *   the event's array in place. A result flagged `isError` is left untouched.
  */
 import { homedir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -49,13 +56,15 @@ import type { ExecLike } from "./shell/git-branch.ts";
 import { createReadRuleTool } from "./shell/read-rule.ts";
 import type { ReadRuleToolDefinition } from "./shell/read-rule.ts";
 import { createCachedScanner } from "./shell/scan-cache.ts";
-import { DEFAULT_BUDGET_TOKENS, renderTraceReport, runInjectionCycle } from "./shell/pipeline.ts";
-import { globalRulesDir, projectRulesDir, resolveBudget } from "./shell/rules-paths.ts";
+import { DEFAULT_BUDGET_TOKENS, evaluateCurrent, renderTraceReport, runInjectionCycle } from "./shell/pipeline.ts";
+import { globalRulesDir, projectRulesDir, resolveAttach, resolveBudget } from "./shell/rules-paths.ts";
 import type { PipelineDeps } from "./shell/pipeline.ts";
+import { newlyActivated, remainingBudget, renderAttachments } from "./src/attach.ts";
 import { TOUCHED_ENTRY_TYPE, addedPaths, initialState, touchedPathsFromEntries, transition } from "./src/state.ts";
 import type { SessionState } from "./src/state.ts";
 import { sectionId } from "./src/render.ts";
 import { explainPath, renderRuleDetail } from "./src/explain.ts";
+import { ruleId } from "./src/types.ts";
 import type { EvaluationTrace, NormalizedPath, Rule, RuleError } from "./src/types.ts";
 
 /**
@@ -158,6 +167,23 @@ export interface ExtensionDeps {
 	 * uncached scanner passes a no-op.
 	 */
 	readonly invalidateScan: () => void;
+	/**
+	 * Whether mid-run attachment is enabled (S9/D3): production resolves
+	 * `PI_RULES_ATTACH` once at the composition root, where only `off` disables it.
+	 * A disabled deployment still invalidates the exists-scan cache; it only stops
+	 * appending rule bodies to tool results.
+	 */
+	readonly attach: boolean;
+}
+
+/**
+ * The `tool_result` return value this wiring produces: pi 1.3.0
+ * `ToolResultEventResult.content` (`dist/core/extensions/types.d.ts:1114-1120`).
+ * Returning it REPLACES the result content (`runner.js emitToolResult`), so the
+ * value always carries every pre-existing part plus the appended attachment.
+ */
+export interface ToolResultPatch {
+	readonly content: readonly unknown[];
 }
 
 /**
@@ -169,6 +195,25 @@ export interface ExtensionDeps {
 const INVALIDATING_TOOLS: ReadonlySet<string> = new Set(["write", "edit", "bash"]);
 
 /**
+ * Tools whose RESULT may carry a mid-run attachment (S9). The specification
+ * restricts attachment to `read`/`edit`/`write`; `grep`/`find`/`ls` also carry a
+ * path argument, but every one of their results stays byte-identical.
+ */
+const ATTACHING_TOOLS: ReadonlySet<string> = new Set(["read", "edit", "write"]);
+
+/**
+ * Session facts the evaluation context needs, captured at each
+ * `before_agent_start`: tool names, model id, git branch. A tool result has no
+ * event of its own for these, so the mid-run attachment evaluation reuses the
+ * last captured set.
+ */
+export interface SessionFacts {
+	readonly toolNames: readonly string[];
+	readonly model: string | undefined;
+	readonly branch: string | undefined;
+}
+
+/**
  * Builds the extension registrar: closures hold the session state, the last
  * evaluation trace and the last discovery parse errors (for /rules). The
  * returned function performs only registrations, so it cannot throw.
@@ -177,20 +222,14 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 	let state: SessionState = initialState;
 	let lastTrace: EvaluationTrace | undefined;
 	let lastErrors: readonly RuleError[] = [];
+	// The ENRICHED rules of the last cycle (see PipelineResult.rules): `read_rule`,
+	// `/rules show` and mid-run attachment all resolve rules by their reference
+	// path, and only the pipeline materializes `relativePath` (L7).
 	let lastDiscoveredRules: readonly Rule[] = [];
-	// Discovery seam wrapper: keep the parse errors of the last cycle for /rules.
-	// `pipeline.scan` is used exactly as injected: the exists-scan cache is built
-	// at the composition root, next to the `invalidateScan` effect it hands over,
-	// so the cache has ONE owner and cannot be invalidated on a copy of itself.
-	const pipeline: PipelineDeps = {
-		...deps.pipeline,
-		discover: async (opts) => {
-			const outcome = await deps.pipeline.discover(opts);
-			lastErrors = outcome.errors;
-			lastDiscoveredRules = outcome.rules;
-			return outcome;
-		},
-	};
+	// Session facts of the last `before_agent_start` (see SessionFacts). `undefined`
+	// until the first cycle runs, which is also why no attachment can happen
+	// before then: there is no run whose session to evaluate.
+	let lastSession: SessionFacts | undefined;
 
 	return (api: PiExtensionApiLike): void => {
 		api.registerTool(createReadRuleTool(() => lastDiscoveredRules));
@@ -231,25 +270,96 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 		api.on("session_start", rebuildTouchedPaths);
 		api.on("session_tree", rebuildTouchedPaths);
 
-		// Exists-scan cache (S8): the scan memo only knows about the filesystem as
-		// of its last run, so a tool result that could have changed the filesystem
-		// drops every entry; a changed pattern set misses by key on its own. This
-		// handler is wiring-owned and total, and maps to NO state event: a tool
-		// result is a completion signal, never a touch batch. Pre-execution
-		// `tool_execution_start` deliberately does not invalidate — the write has
-		// not happened yet, and a scan run between the two events would cache a
+		// Tool results carry two effects, both wiring-owned and total, mapping to NO
+		// state event: a result is a completion signal, never a touch batch.
+		//
+		// S8 — exists-scan cache: the scan memo only knows about the filesystem as of
+		// its last run, so a tool result that could have changed the filesystem drops
+		// every entry; a changed pattern set misses by key on its own. Pre-execution
+		// `tool_execution_start` deliberately does not invalidate — the write has not
+		// happened yet, and a scan run between the two events would cache a
 		// pre-mutation result.
-		const invalidateScanCache = (event: PiEventShape, _ctx: ExtensionContextLike): void => {
-			if (event.type === "tool_result" && INVALIDATING_TOOLS.has(event.toolName)) {
-				deps.invalidateScan();
+		//
+		// S9 — mid-run attachment: the rules that are active NOW and that the model has
+		// not been given yet are appended to the tool result, once per rule per
+		// session. `before_agent_start` fires once per run, so its trace predates the
+		// path this tool call folded — the handler therefore re-evaluates current
+		// session state through the pipeline's non-folding seam (`evaluateCurrent`).
+		// That evaluation must never patch or remove a section: `before_agent_start`
+		// owns the injected-block hash, and a second fold could record a hash for a
+		// block pi never received. It also does not touch `lastTrace`/`lastErrors`/
+		// `lastDiscoveredRules`, so `/rules` keeps reporting the last real cycle.
+		// `content` is never mutated in place: the returned patch carries the original
+		// parts plus one text part, because pi applies a handler RESULT
+		// (`runner.js emitToolResult`) and ignores an in-place edit.
+		const onToolResult = async (
+			event: PiEventShape | null | undefined,
+			ctx: ExtensionContextLike,
+		): Promise<ToolResultPatch | undefined> => {
+			try {
+				if (event === null || event === undefined || typeof event !== "object" || event.type !== "tool_result") {
+					return undefined;
+				}
+				if (INVALIDATING_TOOLS.has(event.toolName)) {
+					deps.invalidateScan();
+				}
+				if (!deps.attach || !ATTACHING_TOOLS.has(event.toolName)) {
+					return undefined;
+				}
+				// `isError` is the installed SDK's own error marker
+				// (`ToolResultEventBase.isError`, types.d.ts:999), so no content heuristic is
+				// needed. No session facts yet means no cycle ran: nothing to evaluate.
+				if (event.isError === true || !Array.isArray(event.content)) {
+					return undefined;
+				}
+				const session = lastSession;
+				if (session === undefined) {
+					return undefined;
+				}
+				// Current state, current session facts, empty prompt: a tool result has no
+				// user prompt of its own, so turn-prompt intent keywords do not apply here.
+				// Both injected effects make this cheap by construction: discovery is
+				// mtime-cached and the exists scan is cached (S8, invalidated just above for
+				// the tools that can change it).
+				const { trace } = await evaluateCurrent({
+					state,
+					cwd: ctx.cwd,
+					prompt: "",
+					now: deps.now(),
+					trusted: ctx.isProjectTrusted(),
+					session,
+					deps: deps.pipeline,
+				});
+				// The delivered set is plain string data from the session state; `ruleId` is
+				// the sanctioned constructor for the branded id the pure core matches on.
+				const batch = newlyActivated(trace, new Set(state.deliveredRuleIds.map((id) => ruleId(id))));
+				const attachment = renderAttachments(batch, remainingBudget(trace, deps.pipeline.budget));
+				if (attachment === undefined) {
+					return undefined;
+				}
+				state = transition(state, { type: "rules_delivered", ruleIds: [...attachment.delivered] });
+				return { content: [...event.content, { type: "text", text: attachment.content }] };
+			} catch {
+				// A hostile result object, or a failing evaluation, must not break the tool
+				// call: this runs inside pi's event dispatch, where an extension throw is
+				// reported as an error. Leaving the result untouched is always safe.
+				return undefined;
 			}
 		};
-		api.on("tool_result", invalidateScanCache);
+		api.on("tool_result", onToolResult);
 
 		api.on("before_agent_start", async (event, ctx) => {
 			// One git ref query per turn: total by contract (shell/git-branch.ts),
 			// so an exec failure yields an absent branch instead of breaking the cycle.
 			const branch = await resolveBranch(ctx.cwd, (command, args, options) => api.exec(command, args, options));
+			// Session facts for this run: the cycle consumes them now, and the mid-run
+			// attachment evaluation reuses them at each tool result.
+			const session: SessionFacts = {
+				toolNames: event.systemPromptOptions.selectedTools,
+				model: ctx.model?.id,
+				branch,
+			};
+			lastSession = session;
 			const result = await runInjectionCycle({
 				state,
 				cwd: ctx.cwd,
@@ -259,18 +369,25 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 				prompt: event.prompt ?? "",
 				now: deps.now(),
 				trusted: ctx.isProjectTrusted(),
-				session: {
-					toolNames: event.systemPromptOptions.selectedTools,
-					model: ctx.model?.id,
-					branch,
-				},
-				deps: pipeline,
+				session,
+				deps: deps.pipeline,
 			});
 			state = result.nextState;
 			lastTrace = result.trace;
+			lastErrors = result.errors;
+			// The enriched rules of this cycle (L7): `read_rule`, `/rules show` and the
+			// attachment renderer all resolve rules by the derived `relativePath`.
+			lastDiscoveredRules = result.rules;
 			// The only pi mutation this extension performs (sections, never systemPrompt).
 			if (result.decision.action === "patch" && result.block !== undefined) {
 				applyInjection(event.systemPromptOptions.sections, result.block);
+				// Mid-run attachment seeding (S9, mandatory): the rules this section just
+				// delivered count as delivered, so a later tool result never re-sends a rule
+				// the model already has in its system prompt.
+				state = transition(state, {
+					type: "rules_delivered",
+					ruleIds: result.trace.selection.active.map((rule) => rule.id),
+				});
 			} else if (result.decision.action === "remove") {
 				removeInjection(event.systemPromptOptions.sections);
 			}
@@ -353,6 +470,8 @@ export default function piRulesMd(pi: ExtensionAPI): void {
 		},
 		now: () => new Date(),
 		invalidateScan: scanCache.invalidate,
+		// Mid-run attachment (S9/D3): on unless `PI_RULES_ATTACH` is `off`.
+		attach: resolveAttach(process.env.PI_RULES_ATTACH),
 	};
 	createRulesExtension(deps)(pi);
 }

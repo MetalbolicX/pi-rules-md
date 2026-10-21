@@ -296,12 +296,12 @@ scanner; the cache never reinterprets, extends, or rewrites ignore lists.
   content produces no prompt diff (zero churn). When no rule is active and one
   was previously injected, the section is removed.
 
-### Mid-run attachment (core)
+### Mid-run attachment
 
 Mid-run delivery appends rules that only became active because of a tool result
 to that result, instead of waiting for the next turn. The pure core
-(`src/attach.ts`) is fixed here; the `tool_result` wiring, the session
-delivered set, and the `PI_RULES_ATTACH=off` toggle are pending (T10).
+(`src/attach.ts`) is specified here together with the wiring that drives it
+(`index.ts`, `PI_RULES_ATTACH`).
 
 - **Candidates.** `newlyActivated(trace, delivered)` returns the trace's
   selected rules, in selection order (pinned `active`, then `onDemand`), whose
@@ -310,7 +310,10 @@ delivered set, and the `PI_RULES_ATTACH=off` toggle are pending (T10).
   delivered once is never re-attached. Budget-dropped rules are not candidates
   and muted rules cannot appear (mute precedes selection).
 - **Remaining budget.** `remaining = budget − Σ estimateTokens` over
-  `trace.selection.active`, i.e. the pinned bodies already in the section.
+  `trace.selection.active`, i.e. the pinned bodies the fresh evaluation would
+  render in the section. A rule that fits the fresh selection can still degrade
+  to a reference line when the section leaves less room than its own body needs,
+  which is why the arithmetic is conservative rather than a second admission pass.
   On-demand index lines consume no budget. The arithmetic is plain, so a
   section that overran its budget leaves zero or negative room.
 - **Pinned attachment.** A pinned rule whose `estimateTokens` fits the running
@@ -331,6 +334,48 @@ delivered set, and the `PI_RULES_ATTACH=off` toggle are pending (T10).
   exactly one trailing newline, so the block is clearly separate from the tool
   output it is appended to and is byte-stable for equal inputs. An empty batch,
   or a batch where nothing can be honestly rendered, produces no block at all.
+- **Delivery event.** The block is appended to the tool result as one extra
+  text part: the handler returns the result's existing content parts plus the
+  block, never a replacement and never an in-place mutation of the array. Pi
+  applies a returned `content` (`ToolResultEventResult.content`,
+  `dist/core/extensions/types.d.ts:1114`), which is how a `tool_result` handler
+  may modify a result.
+- **Which results attach.** Only `read`, `edit`, and `write` results. `grep`,
+  `find`, `ls`, `bash`, and any custom tool result are left byte-identical.
+  An errored result (`isError: true`, the SDK's own marker) is left untouched and
+  delivers nothing.
+- **Delivered set.** The session keeps the ids already handed to the model: the
+  rules of every section the cycle patched, plus every id an attachment batch
+  delivered. Ids are added once, kept in first-delivery order, and never
+  re-attached. The set is cleared on compaction (the transcript the model
+  carries is gone, so a re-injected section may deliver the rule again) and on a
+  session switch or fork (new session).
+- **Re-evaluation at the tool result.** `before_agent_start` fires once per
+  run, so its trace predates the path the tool call folded. The handler therefore
+  evaluates current session state through the non-folding evaluation seam
+  (`evaluateCurrent`): discovery is mtime-cached and the exists scan is cached
+  (invalidated first by the results that can change the filesystem), so the
+  second evaluation is cheap. It uses the session facts of the last
+  `before_agent_start` (tool names, model, branch), the current cwd, trust, and
+  clock, and an EMPTY prompt — a tool result has no user prompt of its own, so
+  turn-prompt intent keywords do not apply mid-run.
+- **No section mutation.** The re-evaluation returns data only: it never patches
+  or removes a section, never folds `block_injected`/`block_removed`, and never
+  mutates the state object. `before_agent_start` owns the injected-block hash and
+  the patch/remove lifecycle. The re-evaluation also does not replace the trace or
+  the discovery errors `/rules` reports, which stay those of the last real cycle.
+- **Toggle.** Attachment is on by default. `PI_RULES_ATTACH=off` (trimmed,
+  case-insensitive) disables it at the composition root; an absent or
+  unrecognized value keeps it enabled. Disabling it never affects the
+  exists-scan invalidation, which stays a separate effect of the same event.
+- **Totality.** The handler never throws: a foreign, truncated, or hostile
+  result shape produces no attachment, because a `tool_result` handler runs
+  inside pi's event dispatch.
+- **Enriched rules.** `read_rule`, `/rules show`, and the attachment renderer
+  resolve rules from the enriched list the cycle produced
+  (`PipelineResult.rules`): discovery returns raw rules without a
+  rules-root-relative path, so the wiring must not read the discovery seam
+  directly or every reference would answer `Unknown rule: <id>`.
 
 ### v1 behavior superseded by v1.1
 

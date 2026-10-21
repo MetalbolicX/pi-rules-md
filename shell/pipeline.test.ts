@@ -16,7 +16,7 @@ import { initialState, transition } from "../src/state.ts";
 import type { SessionState } from "../src/state.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
 import type { Rule, RuleError } from "../src/types.ts";
-import { DEFAULT_BUDGET_TOKENS, renderTraceReport, runInjectionCycle } from "./pipeline.ts";
+import { DEFAULT_BUDGET_TOKENS, evaluateCurrent, renderTraceReport, runInjectionCycle } from "./pipeline.ts";
 import type { DiscoverOptions, PipelineDeps, PipelineInput } from "./pipeline.ts";
 
 /** Fixed wall-clock input: every cycle in this suite evaluates at this instant. */
@@ -156,6 +156,7 @@ describe("runInjectionCycle", () => {
 					touchedPaths: [normalizedPath("src/a.ts")],
 					lastInjectedHash: first.block?.contentHash,
 					mutedRuleIds: [],
+					deliveredRuleIds: [],
 				},
 				empty.deps,
 			),
@@ -208,8 +209,8 @@ describe("runInjectionCycle", () => {
 	});
 
 	it("is deterministic: equal inputs give deep-equal outputs and never mutate the input state", async () => {
-		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [] };
-		const snapshot: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [] };
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [], deliveredRuleIds: [] };
+		const snapshot: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [], deliveredRuleIds: [] };
 		const { deps } = depsWith([ruleWith({ id: "always-on" })]);
 		const input = inputWith(state, deps);
 
@@ -220,6 +221,102 @@ describe("runInjectionCycle", () => {
 		expect(first.nextState).not.toBe(state);
 		// The input state object is untouched by either run.
 		expect(state).toEqual(snapshot);
+	});
+
+	describe("enriched rules exposure (L7 fix)", () => {
+		it("exposes the enriched rules of the cycle, with index and rules-root-relative path", async () => {
+			// Production-shaped discovery: shell/discovery.ts returns rules WITHOUT
+			// `relativePath`/`index`; only the pipeline derives them. Exposing the
+			// enriched list is what lets the wiring's `read_rule` and `/rules show`
+			// resolve a body instead of answering "Unknown rule" (L7).
+			const global = {
+				...ruleWith({ id: "global" }),
+				source: "global" as const,
+				path: normalizedPath(`${homedir()}/.pi/agent/rules/python/style.md`),
+			};
+			const project = ruleWith({ id: "project" });
+			const { deps } = depsWith([global, project]);
+			const result = await runInjectionCycle(inputWith(initialState, deps));
+
+			expect(result.rules.map(({ id, index, relativePath }) => ({ id, index, relativePath }))).toEqual([
+				{ id: project.id, index: 0, relativePath: "project.md" },
+				{ id: global.id, index: 1, relativePath: "python/style.md" },
+			]);
+			expect(result.rules[0]).toEqual(result.trace.selection.active[0]);
+		});
+
+		it("exposes rules that were not selected, so an inactive rule still resolves", async () => {
+			const inactive = ruleWith({ id: "inactive", globs: ["nope/**"], alwaysApply: false });
+			const { deps } = depsWith([inactive]);
+			const result = await runInjectionCycle(inputWith(initialState, deps));
+
+			expect(result.trace.selection.active).toEqual([]);
+			expect(result.rules.map((rule) => rule.id)).toEqual([inactive.id]);
+			expect(result.rules[0]?.relativePath).toBe("inactive.md");
+		});
+
+		it("keeps an already-present relativePath and never mutates the discovered rule objects", async () => {
+			const rule = Object.freeze({ ...ruleWith({ id: "preset" }), relativePath: normalizedPath("custom/preset.md") });
+			const { deps } = depsWith([rule]);
+			const result = await runInjectionCycle(inputWith(initialState, deps));
+
+			expect(result.rules[0]?.relativePath).toBe("custom/preset.md");
+			expect(result.rules[0]?.index).toBe(0);
+			expect(rule.relativePath).toBe("custom/preset.md");
+		});
+	});
+
+	describe("evaluateCurrent (non-folding evaluation seam)", () => {
+		it("evaluates current state without folding any injection decision", async () => {
+			const { deps } = depsWith([ruleWith({ id: "always-on" })]);
+			const state: SessionState = { touchedPaths: [], lastInjectedHash: "hash-from-a-real-cycle", mutedRuleIds: [], deliveredRuleIds: [] };
+			const outcome = await evaluateCurrent(inputWith(state, deps));
+
+			// A trace and the enriched rules, exactly like a cycle, but NO decision and
+			// no next state: folding here would corrupt the last-injected hash of the
+			// section the real cycle owns.
+			expect(outcome.trace.selection.active.map((rule) => rule.id)).toEqual(["always-on"]);
+			expect(outcome.rules.map((rule) => rule.id)).toEqual(["always-on"]);
+			expect(outcome).not.toHaveProperty("decision");
+			expect(outcome).not.toHaveProperty("nextState");
+			expect(state.lastInjectedHash).toBe("hash-from-a-real-cycle");
+		});
+
+		it("matches the trace runInjectionCycle produces for equal inputs", async () => {
+			const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], alwaysApply: false });
+			const { deps } = depsWith([rule]);
+			const state = transition(initialState, { type: "paths_touched", paths: [normalizedPath("src/a.ts")] });
+			const outcome = await evaluateCurrent(inputWith(state, deps));
+			const cycle = await runInjectionCycle(inputWith(state, deps));
+
+			expect(outcome.trace).toEqual(cycle.trace);
+			expect(outcome.rules).toEqual(cycle.rules);
+		});
+
+		it("sees touched paths folded after the last cycle and carries the reason", async () => {
+			const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], alwaysApply: false });
+			const { deps } = depsWith([rule]);
+			const cold = await evaluateCurrent(inputWith(initialState, deps));
+			expect(cold.trace.selection.active).toEqual([]);
+
+			const touched = transition(initialState, { type: "paths_touched", paths: [normalizedPath("src/a.ts")] });
+			const warm = await evaluateCurrent(inputWith(touched, deps));
+			expect(warm.trace.selection.active.map((active) => active.id)).toEqual([rule.id]);
+			expect(warm.trace.results[0]?.matched).toBe(true);
+		});
+
+		it("never mutates the input state and reports discovery errors instead of folding them", async () => {
+			const error: RuleError = { code: "unknown-key", message: "unknown key: owners", file: "/work/.pi/rules/bad.md" };
+			const state: SessionState = { touchedPaths: [], lastInjectedHash: undefined, mutedRuleIds: [], deliveredRuleIds: ["rule-a"] };
+			const snapshot: SessionState = { ...state };
+			const { deps } = depsWith([ruleWith({ id: "always-on" })], [error]);
+
+			const outcome = await evaluateCurrent(inputWith(state, deps));
+
+			expect(state).toEqual(snapshot);
+			expect(outcome.errors).toEqual([error]);
+			expect(outcome.trace.selection.active.map((rule) => rule.id)).toEqual(["always-on"]);
+		});
 	});
 
 	describe("session mute (v1.2)", () => {

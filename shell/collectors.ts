@@ -35,8 +35,9 @@
  *   here instead of being silently mapped to a wrong reset.
  * - `tool_result` → `[]`: a completed tool call is a filesystem signal, not
  *   session state. The index wiring invalidates the exists-scan cache for
- *   `write`/`edit`/`bash` results (S8) and folds nothing; a result's `input`
- *   path is never treated as a touched path (pre-execution capture owns that).
+ *   `write`/`edit`/`bash` results (S8) and appends the newly activated rules to
+ *   `read`/`edit`/`write` results (S9); a result's `input` path is never treated
+ *   as a touched path (pre-execution capture owns that).
  * - pre-execution read/edit/write/grep/find events use their built-in `args.path`
  *   to produce one `paths_touched`; bash and unknown tools produce no path event.
  *
@@ -90,6 +91,18 @@ export type PiEventShape =
 			 * a completed tool call contributes no path and no state event.
 			 */
 			readonly input?: unknown;
+			/**
+			 * Result parts (`ToolResultEventBase.content`, types.d.ts:993). Declared for
+			 * the wiring's mid-run attachment (S9), which appends one text part; the
+			 * collector itself contributes no state event for a tool result. Typed
+			 * `unknown` because the mapper treats a runtime result as untrusted.
+			 */
+			readonly content?: unknown;
+			/**
+			 * `ToolResultEventBase.isError` (types.d.ts:999): a failed call. The
+			 * attachment handler leaves an errored result untouched.
+			 */
+			readonly isError?: boolean;
 	  };
 
 /** Relativizes a raw path against `cwd`: strip a `cwd + "/"` prefix, else keep. */

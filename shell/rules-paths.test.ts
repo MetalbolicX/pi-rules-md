@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { globalRulesDir, projectRulesDir, resolveBudget } from "./rules-paths.ts";
+import { globalRulesDir, projectRulesDir, resolveAttach, resolveBudget } from "./rules-paths.ts";
 
 describe("rules paths", () => {
 	it("normalizes global rules directories on Windows", () => {
@@ -22,5 +22,24 @@ describe("rules paths", () => {
 		["0", 2000, 2000],
 	])("resolves budget %s", (raw, fallback, expected) => {
 		expect(resolveBudget(raw, fallback)).toBe(expected);
+	});
+});
+
+describe("resolveAttach", () => {
+	// S9/D3: mid-run attachment is ON unless the value is exactly `off`.
+	// Mirroring resolveBudget, an absent or unrecognized value keeps the default.
+	it.each([
+		["off", false],
+		["OFF", false],
+		[" off ", false],
+		[undefined, true],
+		["", true],
+		["on", true],
+		["true", true],
+		["false", true],
+		["0", true],
+		["disable", true],
+	])("resolves attachment toggle %s", (raw, expected) => {
+		expect(resolveAttach(raw)).toBe(expected);
 	});
 });

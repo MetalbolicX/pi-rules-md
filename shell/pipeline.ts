@@ -11,6 +11,11 @@
  *   arrives as `now: Date`, discovery and scanning arrive as `deps`, and
  *   hashing/rendering happen inside the injected pure stages. Equal inputs
  *   produce deep-equal outputs.
+ * - Evaluation and decision are separate steps. `evaluateCurrent` discovers,
+ *   enriches, and evaluates — data out, no state fold — so a second caller (the
+ *   mid-run attachment handler) can evaluate the session at a tool result without
+ *   ever touching the section lifecycle. `runInjectionCycle` adds the decision
+ *   and its fold on top of it.
  * - Totality of the fold: the decision is applied to the state, never to pi:
  *   `patch` folds `block_injected(block.contentHash)` (a repeated identical
  *   hash is an idempotent same-value overwrite — pi rebuilds sections every
@@ -103,15 +108,44 @@ export interface PipelineResult {
 	readonly decision: InjectionDecision;
 	/** The rendered section, when something is active. */
 	readonly block: InjectionBlock | undefined;
+	/**
+	 * The ENRICHED rules this cycle evaluated: discovery order (project first),
+	 * with `index` and the rules-root-relative `relativePath` materialized, and
+	 * including rules that did not match. This is the only honest list for
+	 * consumers that resolve a rule by its reference path (`read_rule`, `/rules
+	 * show`, mid-run attachment): `shell/discovery.ts` returns raw rules without
+	 * `relativePath`, so reading the discovery seam directly would answer "Unknown
+	 * rule" in production while fixture-based tests pass (L7).
+	 */
+	readonly rules: readonly Rule[];
+	/** Parse errors the cycle's discovery collected (reported by /rules). */
+	readonly errors: readonly RuleError[];
+}
+
+/** One evaluation's outcome: the trace plus the rules it evaluated and discovery's errors. */
+export interface CycleEvaluation {
+	readonly trace: EvaluationTrace;
+	readonly rules: readonly Rule[];
+	readonly errors: readonly RuleError[];
 }
 
 /**
- * Runs one full injection cycle: builds the evaluation context, discovers
- * rules, evaluates, renders, decides, and folds the decision into the state.
- * Pure with respect to its inputs: equal inputs give deep-equal outputs and
- * the input `state` is never mutated.
+ * One evaluation over CURRENT session state, with NO decision and NO state fold.
+ *
+ * This is the shared evaluation path: `runInjectionCycle` uses it and then owns
+ * the injection decision, and the mid-run attachment handler (S9) uses it to
+ * evaluate the session as the tool result leaves it. Keeping the two on one
+ * function is what makes the duplicate-materialization path impossible: the
+ * rules are sorted and enriched exactly once here.
+ *
+ * Splitting it this way matters because a second caller must NOT fold
+ * injection state. `before_agent_start` owns `lastInjectedHash`, which drives the
+ * patch/remove lifecycle; an evaluation that also folded `block_injected` could
+ * record a hash for a block pi never received and leave a stale section in place.
+ * So this function returns data only: it never calls `transition`, never touches
+ * the input state object, and never mutates a section.
  */
-export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineResult> => {
+export const evaluateCurrent = async (input: PipelineInput): Promise<CycleEvaluation> => {
 	const ctx: EvaluationContext = {
 		now: input.now.getTime(),
 		cwd: normalizedPath(input.cwd),
@@ -139,6 +173,17 @@ export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineR
 		mutedRuleIds: input.state.mutedRuleIds,
 	});
 
+	return { trace, rules, errors: discovered.errors };
+};
+
+/**
+ * Runs one full injection cycle: evaluates current state through
+ * `evaluateCurrent`, then decides what pi's sections must do and folds that
+ * decision into the state. Pure with respect to its inputs: equal inputs give
+ * deep-equal outputs and the input `state` is never mutated.
+ */
+export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineResult> => {
+	const { trace, rules, errors } = await evaluateCurrent(input);
 	const { block } = trace;
 	const decision = injectionDecision(block, input.state.lastInjectedHash);
 	const nextState =
@@ -148,7 +193,7 @@ export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineR
 				? transition(input.state, { type: "block_removed" })
 				: input.state;
 
-	return { nextState, trace, decision, block };
+	return { nextState, trace, decision, block, rules, errors };
 };
 
 /** Lines for one rule outcome: active rules name their reasons, inactive ones their failure. */
