@@ -41,6 +41,7 @@ import { globalRulesDir, projectRulesDir, resolveBudget } from "./shell/rules-pa
 import type { PipelineDeps } from "./shell/pipeline.ts";
 import { initialState, transition } from "./src/state.ts";
 import type { SessionState } from "./src/state.ts";
+import { sectionId } from "./src/render.ts";
 import type { EvaluationTrace, NormalizedPath, Rule, RuleError } from "./src/types.ts";
 
 /** Handler context fields the wiring consumes (mirror of pi ExtensionContext). */
@@ -49,6 +50,10 @@ export interface ExtensionContextLike {
 	readonly isProjectTrusted: () => boolean;
 	/** Mirror of pi's `Model` — only the id is consumed. */
 	readonly model: { readonly id: string } | undefined;
+	/** Mirror of pi 1.3.0 `ExtensionContext.hasUI` (`dist/core/extensions/types.d.ts:219`): status-bar UI exists only in TUI/RPC modes. */
+	readonly hasUI: boolean;
+	/** Mirror of pi 1.3.0 `ExtensionUIContext.setStatus` (`dist/core/extensions/types.d.ts:81`): the only ui method the wiring consumes. */
+	readonly ui: { readonly setStatus: (key: string, text: string | undefined) => void };
 }
 
 /** Mirror of pi `BeforeAgentStartEvent` limited to the wiring's mutation surface. */
@@ -175,12 +180,22 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 			} else if (result.decision.action === "remove") {
 				removeInjection(event.systemPromptOptions.sections);
 			}
+			// Status bar (pi TUI/RPC only): one visibility line per cycle, keyed by the
+			// section id; explicitly cleared when nothing is active. `<active>` counts
+			// the pinned active rules; the estimate covers the whole rendered section.
+			if (ctx.hasUI) {
+				const active = result.trace.selection.active.length;
+				ctx.ui.setStatus(
+					sectionId,
+					result.trace.block === undefined ? undefined : `rules: ${active} · ~${result.trace.estimatedTokens} tok`,
+				);
+			}
 		});
 
 		api.registerCommand("rules", {
 			description: "Show why each pi-rules-md rule is active or inactive",
 			handler: async (_args, ctx) => {
-				ctx.ui.notify(renderTraceReport(lastTrace, lastErrors, lastDiscoveredRules).join("\n"), "info");
+				ctx.ui.notify(renderTraceReport(lastTrace, lastErrors, lastDiscoveredRules, deps.pipeline.budget).join("\n"), "info");
 			},
 		});
 	};

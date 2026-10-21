@@ -56,12 +56,30 @@ const ruleWith = (fields: {
 	content: fields.content ?? `body of ${fields.id ?? "always-on"}\n`,
 });
 
-/** Fake handler context: cwd + trust + model id, nothing else. */
+/** Fake handler context: cwd + trust + model id + ui surface, nothing else. */
 const handlerCtx = (cwd: string, trusted = true, model?: string): ExtensionContextLike => ({
 	cwd,
 	isProjectTrusted: () => trusted,
 	model: model === undefined ? undefined : { id: model },
+	hasUI: false,
+	ui: { setStatus: () => undefined },
 });
+
+/** Fake handler context that records every ui.setStatus call, with hasUI switchable. */
+const ctxWithStatus = (
+	cwd: string,
+	hasUI: boolean,
+): { readonly ctx: ExtensionContextLike; readonly statuses: Array<readonly [string, string | undefined]> } => {
+	const statuses: Array<readonly [string, string | undefined]> = [];
+	const ctx: ExtensionContextLike = {
+		cwd,
+		isProjectTrusted: () => true,
+		model: undefined,
+		hasUI,
+		ui: { setStatus: (key, text) => { statuses.push([key, text]); } },
+	};
+	return { ctx, statuses };
+};
 
 /** Fake command context recording every ui.notify call. */
 const commandCtx = (): { readonly ctx: RulesCommandContext; readonly notifications: string[] } => {
@@ -386,6 +404,51 @@ describe("createRulesExtension before_agent_start cycle", () => {
 	});
 });
 
+describe("status bar", () => {
+	it("sets the pi-rules-md status line after a cycle when UI is available", async () => {
+		const { deps } = depsWith({ rules: [ruleWith({})] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const { ctx, statuses } = ctxWithStatus("/work", true);
+
+		await emitStart(api, ctx);
+
+		expect(statuses).toHaveLength(1);
+		const [key, text] = statuses[0] ?? ["", ""];
+		expect(key).toBe("pi-rules-md");
+		expect(text).toMatch(/^rules: 1 · ~\d+ tok$/);
+	});
+
+	it("clears the status when a later cycle has nothing active", async () => {
+		const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const { ctx, statuses } = ctxWithStatus("/work", true);
+
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		await emitStart(api, ctx);
+		expect(statuses.at(-1)?.[1]).toMatch(/^rules: 1 · ~\d+ tok$/);
+
+		// Switch resets touched paths: nothing active on the next cycle, so the
+		// status key is explicitly cleared with undefined.
+		await emitSignal(api, { type: "session_before_switch" }, ctx);
+		await emitStart(api, ctx);
+		expect(statuses.at(-1)).toEqual(["pi-rules-md", undefined]);
+	});
+
+	it("never touches the status bar when hasUI is false", async () => {
+		const { deps } = depsWith({ rules: [ruleWith({})] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const { ctx, statuses } = ctxWithStatus("/work", false);
+
+		await emitStart(api, ctx);
+
+		expect(statuses).toHaveLength(0);
+	});
+});
+
 describe("/rules command", () => {
 	it("reports No evaluation yet before the first cycle", async () => {
 		const { deps } = depsWith({ rules: [] });
@@ -406,6 +469,11 @@ describe("/rules command", () => {
 		expect(report).toContain("active: big (always active)");
 		expect(report).toContain("dropped: over (budget)");
 		expect(report).toContain("parse error: /work/.pi/rules/bad.md (unknown-key): unknown key: owners");
+		// The report carries the resolved budget: used pinned tokens over the budget,
+		// plus the whole-section estimate line while a block exists.
+		expect(report).toContain("budget: 10/15 estimated tokens");
+		expect(report).toContain("section: ~");
+		expect(report).toContain(" tokens");
 	});
 });
 

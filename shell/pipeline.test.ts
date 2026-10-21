@@ -239,5 +239,46 @@ describe("runInjectionCycle", () => {
 				`injected: section pi-rules-md (hash ${result.block?.contentHash})`,
 			]);
 		});
+
+		it("reports pinned budget usage and the whole-section estimate when a budget is supplied", async () => {
+			const pinned = ruleWith({ id: "pinned", content: "x".repeat(40) }); // ceil(40/4) = 10 tokens
+			const { deps } = depsWith([pinned]);
+			const result = await runInjectionCycle({ ...inputWith(initialState, deps), deps: { ...deps, budget: 15 } });
+			const report = renderTraceReport(result.trace, [], [pinned], 15);
+			expect(report).toContain("budget: 10/15 estimated tokens");
+			expect(report).toContain(`section: ~${result.trace.estimatedTokens} tokens`);
+			expect(report.findIndex((line) => line.startsWith("budget: 10/15"))).toBeLessThan(
+				report.findIndex((line) => line.startsWith("injected:")),
+			);
+		});
+
+		it("counts only pinned bodies as used: an on-demand rule adds index estimate but no used tokens", async () => {
+			const pinned = ruleWith({ id: "pinned", content: "x".repeat(40) }); // 10 tokens
+			const reference: Rule = { ...ruleWith({ id: "reference", content: "y".repeat(400) }), load: "on-demand" };
+			const { deps } = depsWith([pinned, reference]);
+			const result = await runInjectionCycle(inputWith(initialState, deps));
+			const report = renderTraceReport(result.trace, [], undefined, DEFAULT_BUDGET_TOKENS);
+			expect(report).toContain(`budget: 10/${DEFAULT_BUDGET_TOKENS} estimated tokens`);
+			expect(report).toContain(`section: ~${result.trace.estimatedTokens} tokens`);
+			// The section estimate covers the rendered on-demand index line too.
+			expect(result.trace.estimatedTokens).toBeGreaterThan(10);
+		});
+
+		it("keeps the budget line but drops the section line when nothing is active", async () => {
+			const { deps } = depsWith([ruleWith({ id: "never", globs: ["nope/**"], alwaysApply: false })]);
+			const result = await runInjectionCycle(inputWith(initialState, deps));
+			const report = renderTraceReport(result.trace, [], undefined, DEFAULT_BUDGET_TOKENS);
+			expect(report).toContain(`budget: 0/${DEFAULT_BUDGET_TOKENS} estimated tokens`);
+			expect(report.some((line) => line.startsWith("section:"))).toBe(false);
+			expect(report.some((line) => line.startsWith("injected:"))).toBe(false);
+		});
+
+		it("omits the budget and section lines when no budget is supplied", async () => {
+			const { deps } = depsWith([ruleWith({ id: "always-on" })]);
+			const result = await runInjectionCycle(inputWith(initialState, deps));
+			const report = renderTraceReport(result.trace, []);
+			expect(report.some((line) => line.startsWith("budget:"))).toBe(false);
+			expect(report.some((line) => line.startsWith("section:"))).toBe(false);
+		});
 	});
 });

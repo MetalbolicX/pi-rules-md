@@ -188,6 +188,13 @@ we do not parse paths from shell command strings.
 - The evaluation trace partitions matched rules into pinned `active` and
   `onDemand`, reports all matched rule file paths (including on-demand paths),
   and estimates tokens over the complete rendered block including its index.
+- The `/rules` report appends `budget: <used>/<budget> estimated tokens` —
+  `used` sums the estimated tokens of the **pinned active bodies only** —
+  and, while a section is injected, `section: ~<estimatedTokens> tokens`
+  covering the whole rendered section including the on-demand index.
+- In UI modes (`ctx.hasUI`: TUI/RPC), the extension maintains the status-bar
+  key `pi-rules-md` as `rules: <pinned-active> · ~<estimatedTokens> tok` after
+  each evaluation and clears it (undefined) when nothing is active.
 - Rendered as one `pi-rules-md` system-prompt section: `# Rules` header,
   framing line, one entry per selected pinned rule (`## <description>`), optional
   `> Triggered by: <reasons>` when reasons exist, and `---` separators.

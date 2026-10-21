@@ -33,6 +33,7 @@ import { conditionSpec, CONDITION_KEYS } from "../src/conditions/table.ts";
 import { evaluate } from "../src/engine.ts";
 import { triggerPhrase } from "../src/render.ts";
 import type { GlobScanner } from "../src/match.ts";
+import { estimateTokens } from "../src/select.ts";
 import { transition } from "../src/state.ts";
 import type { SessionState } from "../src/state.ts";
 import { injectionDecision } from "./injection.ts";
@@ -179,10 +180,20 @@ const errorLines = (errors: readonly RuleError[]): string[] =>
  * Renders the last evaluation as markdown lines for the /rules command:
  * per-rule active/inactive with reasons, dropped rules with causes, parse
  * errors, and a footer naming the injected section and its content hash
- * (only when a block was rendered). Pure and deterministic — no trace means
- * exactly one "No evaluation yet." line.
+ * (only when a block was rendered). When `budget` is supplied (the resolved
+ * selection budget), a `budget: <used>/<budget> estimated tokens` line is
+ * added — `used` sums `estimateTokens` over the PINNED active bodies only,
+ * never the on-demand index — plus a `section: ~<estimatedTokens> tokens`
+ * line while a block exists, covering the whole rendered section including
+ * the on-demand index. Omitting `budget` yields the historical report shape.
+ * Pure and deterministic — no trace means exactly one "No evaluation yet." line.
  */
-export const renderTraceReport = (trace: EvaluationTrace | undefined, errors: readonly RuleError[], rules?: readonly Rule[]): readonly string[] => {
+export const renderTraceReport = (
+	trace: EvaluationTrace | undefined,
+	errors: readonly RuleError[] = [],
+	rules?: readonly Rule[],
+	budget?: number,
+): readonly string[] => {
 	if (trace === undefined) {
 		return ["No evaluation yet."];
 	}
@@ -193,6 +204,13 @@ export const renderTraceReport = (trace: EvaluationTrace | undefined, errors: re
 	lines.push(...resultLines(trace.results, rules));
 	lines.push(...droppedLines(trace));
 	lines.push(...errorLines(errors));
+	if (budget !== undefined) {
+		const used = trace.selection.active.reduce((sum, rule) => sum + estimateTokens(rule), 0);
+		lines.push(`budget: ${used}/${budget} estimated tokens`);
+		if (trace.block !== undefined) {
+			lines.push(`section: ~${trace.estimatedTokens} tokens`);
+		}
+	}
 	if (trace.block !== undefined) {
 		lines.push(`injected: section ${trace.block.sectionId} (hash ${trace.block.contentHash})`);
 	}

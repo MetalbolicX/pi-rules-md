@@ -177,7 +177,9 @@ updated with `pi-rules update`.
 
 - `/rules` — report of the last evaluation: active rules with reasons,
   inactive rules with reasons, budget drops with cause, parse/discovery
-  errors, and the injected content hash.
+  errors, the injected content hash, and `budget:`/`section:` token
+  visibility lines. In TUI/RPC modes a status-bar entry `pi-rules-md`
+  shows `rules: <active> · ~<tokens> tok` while anything is active.
 
 ## Trust model
 
