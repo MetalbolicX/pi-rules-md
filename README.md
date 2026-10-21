@@ -370,11 +370,16 @@ The wrapper invokes the `pi` CLI for package changes; it never edits
 | `pi-rules update` | Update an unpinned npm installation. |
 | `pi-rules status` | Show installation status and available updates. |
 | `pi-rules doctor` | Diagnose installation health. |
+| `pi-rules lint [dir...]` | Validate rule files and print one line per error. |
 
 Common options: `--local` uses project scope for install, uninstall, and
 update; `--purge` removes the package directory during uninstall; `--dry-run`
 prints actions without changing anything; `--agent-dir <dir>` selects a Pi
-agent directory.
+agent directory (for `lint` it also moves the global rules root).
+
+The rule-authoring commands `pi-rules new` and `pi-rules explain` are not here
+yet: they land with the next slice, and this table will list them then. Their
+absence is pending work, not an oversight.
 
 For local development, load the source directly:
 
@@ -385,6 +390,38 @@ pi --extension ./index.ts
 For a local-path install, run `pnpm build` first; the package manifest loads
 `./dist/extension.js`. Source entries track the working tree; npm entries are
 updated with `pi-rules update`.
+
+## Linting rule files
+
+`pi-rules lint [dir...]` parses native rule files and reports every problem
+before you rely on them (otherwise a bad rule only shows up as a parse error
+in `/rules` after an evaluation cycle):
+
+```sh
+pi-rules lint                  # .pi/rules and ~/.pi/agent/rules
+pi-rules lint src/.pi/rules    # explicit directories instead
+```
+
+Each error prints as `<file>: <code>: <message>` on its own line, sorted by
+file then code, followed by one summary line such as
+`lint: 11 rule files, 2 errors`. The exit code is `1` when any error was
+found and `0` otherwise, so the command composes in scripts and CI.
+
+Defaults and scope:
+
+- Without arguments, lint scans `<cwd>/.pi/rules` and the global rules
+directory (`~/.pi/agent/rules`, or `<agent dir>/rules` with
+`--agent-dir`/`PI_RULES_AGENT_DIR`). A missing default directory is not an
+error — a project or machine without rules is a valid state.
+- Directories passed on the command line must exist: a missing explicit
+directory is reported as `source-unreadable` and exits `1`.
+- Only the **native** rule format (`RULE-SPEC.md`, strict v1 schema) is
+linted. Imported formats (`.github/instructions`, `.claude/rules`) are
+lenient, use a different key set, and are validated by their own importers.
+- Listing is recursive over `**/*.md`, skips `.git` and `node_modules`,
+ignores non-markdown files, and never follows symlinks.
+- A file that cannot be read is reported as a `read-failure` error line
+rather than aborting the run.
 
 ## Commands
 

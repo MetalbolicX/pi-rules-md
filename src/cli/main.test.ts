@@ -23,6 +23,7 @@ describe("runCli argument handling", () => {
 		const output = io();
 		await expect(runCli(["--help"], output)).resolves.toBe(0);
 		expect(output.stdout.join("\n")).toMatch(/install.*uninstall.*update.*status.*doctor/s);
+		expect(output.stdout.join("\n")).toMatch(/lint/);
 	});
 
 	test("no args prints usage and exits 2", async () => {
@@ -56,9 +57,61 @@ describe("runCli argument handling", () => {
 			update: async () => 0,
 			status: async () => 0,
 			doctor: async () => 0,
+			lint: async () => 0,
 		};
 		await expect(runCli(["install"], output, flows)).resolves.toBe(0);
 		expect(received?.agentDir).toBe("/sandbox/agent");
+	});
+});
+
+describe("runCli lint dispatch", () => {
+	test("lint --help prints the lint help, not the generic usage", async () => {
+		const output = io();
+		await expect(runCli(["lint", "--help"], output)).resolves.toBe(0);
+		expect(output.stdout.join("\n")).toContain("Usage: pi-rules lint [dir...]");
+		expect(output.stdout.join("\n")).toContain("<file>: <code>: <message>");
+	});
+
+	test("lint forwards positional directories to the flow", async () => {
+		const output = io();
+		let received: readonly string[] | undefined;
+		const flows = {
+			install: async () => 0,
+			uninstall: async () => 0,
+			update: async () => 0,
+			status: async () => 0,
+			doctor: async () => 0,
+			lint: async (options: { dirs?: readonly string[] }) => {
+				received = options.dirs;
+				return 1;
+			},
+		};
+		await expect(runCli(["lint", "rules-a", "rules-b"], output, flows)).resolves.toBe(1);
+		expect(received).toEqual(["rules-a", "rules-b"]);
+	});
+
+	test("lint without directories forwards an empty positional list", async () => {
+		const output = io();
+		let received: readonly string[] | undefined;
+		const flows = {
+			install: async () => 0,
+			uninstall: async () => 0,
+			update: async () => 0,
+			status: async () => 0,
+			doctor: async () => 0,
+			lint: async (options: { dirs?: readonly string[] }) => {
+				received = options.dirs;
+				return 0;
+			},
+		};
+		await expect(runCli(["lint"], output, flows)).resolves.toBe(0);
+		expect(received).toEqual([]);
+	});
+
+	test("other commands still reject positional arguments", async () => {
+		const output = io();
+		await expect(runCli(["status", "extra"], output)).resolves.toBe(2);
+		expect(output.stderr.join("\n")).toMatch(/Usage:.*pi-rules/s);
 	});
 });
 
@@ -73,6 +126,7 @@ describe("runCli unimplemented flows degrade gracefully", () => {
 			doctor: async () => {
 				throw new NotImplementedFlowError("doctor");
 			},
+			lint: async () => 0,
 		};
 		await expect(runCli(["doctor"], output, flows)).resolves.toBe(2);
 		expect(output.stderr.join("\n")).toMatch(/doctor flow not implemented/);
@@ -89,6 +143,7 @@ describe("runCli unimplemented flows degrade gracefully", () => {
 				throw new Error("boom");
 			},
 			doctor: async () => 0,
+			lint: async () => 0,
 		};
 		await expect(runCli(["status"], output, flows)).rejects.toThrow("boom");
 	});

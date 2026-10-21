@@ -6,6 +6,7 @@ import { uninstallFlow } from "./uninstall.js";
 import { updateFlow } from "./update.js";
 import { statusFlow } from "./status.js";
 import { doctorFlow } from "./doctor.js";
+import { LINT_USAGE, lintFlow } from "./lint.js";
 
 export const USAGE = `Usage: pi-rules <command> [options]
 
@@ -15,6 +16,7 @@ Commands:
   update     Update pi-rules-md
   status     Show installation status
   doctor     Diagnose installation health
+  lint       Validate rule files
 
 Options:
   --local              Use the project scope (install/uninstall/update)
@@ -34,11 +36,13 @@ export interface FlowOptions {
 	local?: boolean;
 	purge?: boolean;
 	dryRun: boolean;
+	/** Positional arguments; only `lint` accepts them (rule directories). */
+	dirs?: readonly string[];
 	io?: CliIO;
 	fetchImpl?: typeof fetch;
 }
 
-export type CliFlows = Record<"install" | "uninstall" | "update" | "status" | "doctor", (options: FlowOptions) => number | Promise<number>>;
+export type CliFlows = Record<"install" | "uninstall" | "update" | "status" | "doctor" | "lint", (options: FlowOptions) => number | Promise<number>>;
 
 export class NotImplementedFlowError extends Error {
 	constructor(name: string) {
@@ -53,6 +57,7 @@ const defaultFlows: CliFlows = {
 	update: updateFlow,
 	status: statusFlow,
 	doctor: doctorFlow,
+	lint: lintFlow,
 };
 
 export async function runCli(args: string[], io: CliIO, flows: CliFlows = defaultFlows): Promise<number> {
@@ -73,10 +78,11 @@ export async function runCli(args: string[], io: CliIO, flows: CliFlows = defaul
 
 	let options: FlowOptions;
 	try {
-		const { values } = parseArgs({
+		const { values, positionals } = parseArgs({
 			args: commandArgs,
 			strict: true,
-			allowPositionals: false,
+			// Only `lint` takes positional arguments (the rule directories it lints).
+			allowPositionals: command === "lint",
 			options: {
 				...(command === "install" || command === "uninstall" || command === "update" ? { local: { type: "boolean" as const } } : {}),
 				...(command === "uninstall" ? { purge: { type: "boolean" as const } } : {}),
@@ -86,7 +92,7 @@ export async function runCli(args: string[], io: CliIO, flows: CliFlows = defaul
 			},
 		});
 		if (values.help) {
-			io.stdout.push(USAGE);
+			io.stdout.push(command === "lint" ? LINT_USAGE : USAGE);
 			return 0;
 		}
 		const agentDir = values["agent-dir"] ?? io.env.PI_RULES_AGENT_DIR;
@@ -99,6 +105,7 @@ export async function runCli(args: string[], io: CliIO, flows: CliFlows = defaul
 			local: values.local === true,
 			purge: values.purge === true,
 			dryRun: values["dry-run"] ?? false,
+			...(command === "lint" ? { dirs: positionals } : {}),
 		};
 	} catch (error) {
 		io.stderr.push(`${error instanceof Error ? error.message : String(error)}\n${USAGE}`);
