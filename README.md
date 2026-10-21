@@ -29,6 +29,13 @@ Functional core / imperative shell; pure functions and data, no classes.
    re-applied every turn while rules are active; identical content produces no
    prompt diff, and the section is removed when nothing is active.
 
+Mid-run delivery is being built on top of that section: rules that only become
+active because of a `read`/`edit`/`write` result are appended to that tool
+result, once per rule per session. The pure core (which rules are new, the
+remaining budget, the attachment block) is specified in
+[RULE-SPEC.md §6](RULE-SPEC.md#mid-run-attachment-core); the event wiring is
+still pending.
+
 The complete rule-file contract is specified in [RULE-SPEC.md](RULE-SPEC.md).
 
 ## Quick start

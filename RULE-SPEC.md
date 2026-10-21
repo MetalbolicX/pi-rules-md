@@ -296,6 +296,42 @@ scanner; the cache never reinterprets, extends, or rewrites ignore lists.
   content produces no prompt diff (zero churn). When no rule is active and one
   was previously injected, the section is removed.
 
+### Mid-run attachment (core)
+
+Mid-run delivery appends rules that only became active because of a tool result
+to that result, instead of waiting for the next turn. The pure core
+(`src/attach.ts`) is fixed here; the `tool_result` wiring, the session
+delivered set, and the `PI_RULES_ATTACH=off` toggle are pending (T10).
+
+- **Candidates.** `newlyActivated(trace, delivered)` returns the trace's
+  selected rules, in selection order (pinned `active`, then `onDemand`), whose
+  id is not in `delivered`. Callers seed `delivered` with the ids rendered by
+  the current section plus every id attached earlier, so a rule already
+  delivered once is never re-attached. Budget-dropped rules are not candidates
+  and muted rules cannot appear (mute precedes selection).
+- **Remaining budget.** `remaining = budget − Σ estimateTokens` over
+  `trace.selection.active`, i.e. the pinned bodies already in the section.
+  On-demand index lines consume no budget. The arithmetic is plain, so a
+  section that overran its budget leaves zero or negative room.
+- **Pinned attachment.** A pinned rule whose `estimateTokens` fits the running
+  remaining budget contributes its full entry — the same bytes the section
+  renderer emits for that rule and its reasons (`## <description>`, optional
+  `> Triggered by:` line, optional `> Level:` line, body verbatim) — and
+  decrements the remaining budget.
+- **Degradation.** A pinned rule that does not fit contributes the one-line
+  reference `- <relativePath> — <description> (fetch with the read_rule tool)`
+  instead, the same format as the on-demand index. It charges no budget and
+  still counts as delivered, because re-sending a pointer conveys nothing new.
+  A rule without `relativePath` has no fetchable reference: it is skipped and
+  not counted as delivered.
+- **On-demand attachment.** An on-demand rule contributes its reference line
+  only, never its body, and charges no budget.
+- **Block shape.** One batch renders as `\n\n---\n\n## Rules newly activated
+  by this tool result\n\n` followed by the parts joined with `\n\n---\n\n` and
+  exactly one trailing newline, so the block is clearly separate from the tool
+  output it is appended to and is byte-stable for equal inputs. An empty batch,
+  or a batch where nothing can be honestly rendered, produces no block at all.
+
 ### v1 behavior superseded by v1.1
 
 - Equal-content pinned rules no longer keep the first occurrence: the higher
