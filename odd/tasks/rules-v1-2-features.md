@@ -1,8 +1,8 @@
 # Feature: rules-v1-2-features (pi-rules-md opportunities plan)
 
-Status: **IMPLEMENTING — T0 complete; T1 in progress.** Base: `main` @ `d2fae57` + existing uncommitted pi 1.3.0 dependency bump.
-Tracker: `feat/rules-v1-2`; current child: `feat/rules-v1-2-00-sdk`. Rule format doc: **v1.2**; frontmatter `version: 1` unchanged. Runner: `pnpm test` (Vitest).
-Delivery: auto-chain / feature-branch-chain (user selected); forecast >2,000 authored lines. Slice 00: T0 only (`d2fae57` → `d11ed12`), ~130 authored changed lines excluding lockfile; future slices depend on their immediate predecessor. No PR creation authorized. Source analysis: Engram obs 11893.
+Status: **BLOCKED — T0 complete; T1 requires an available writer or explicit inline-routing decision.** Base: `main` @ `d2fae57` + existing uncommitted pi 1.3.0 dependency bump.
+Tracker: `feat/rules-v1-2`; current child: `feat/rules-v1-2-01-model` (based on slice 00). Rule format doc: **v1.2**; frontmatter `version: 1` unchanged. Runner: `pnpm test` (Vitest).
+Delivery: auto-chain / feature-branch-chain (user selected); forecast >2,000 authored lines. Slice 00: T0 + ledger (`d2fae57` → `2213536`, behavior commit `d11ed12`), ~207 authored changed lines excluding lockfile; slice 01: T1 (unstarted). Future slices depend on their immediate predecessor. No PR creation authorized. Source analysis: Engram obs 11893.
 
 ## Specs
 
@@ -37,7 +37,7 @@ Route defaults: inline (Writer rule not triggered unless noted). High-risk units
 | ID | Specs | Work unit | Route | Risk | Commit |
 |---|---|---|---|---|---|
 | T0 | S0 | DONE — Pi 1.3.0 mirrors fixed; RED TS2345 → GREEN 475 tests/tsc/lint; independent S0 verification MET; review approved+acknowledged | delegated (context backstop) | item 5 (dependency) | d11ed12 |
-| T1 | S1 | IN PROGRESS — Model glob predicate + mismatch reason + RULE-SPEC v1.2 example fix | delegated (context backstop) | item 3 (key semantics; exact values preserved) | — |
+| T1 | S1 | BLOCKED — Writer unavailable: task mvhhbpyd-3-kj25 failed with "assistant reported an error"; no edits. Wait for available writer or explicit inline-routing decision. Model matching still exact. | delegated (context backstop) | item 3 (key semantics; exact values preserved) | — |
 | T2 | S2 | `shell/git-branch.ts` exec seam, branch glob predicate, wire into cycle | inline | none expected | — |
 | T3 | S3 | Budget lines in `/rules`, status-bar projection | inline | none | — |
 | T4 | S4 | `/rules show` / `why` / usage; shared pure `explainPath` in core | inline | none | — |
@@ -75,3 +75,4 @@ Parallelism candidate (only if a Writer-rule reason holds at the time): {T13, T1
 - **L5** (user choice): "Feature/tracker branch chain (recommended)" (`feature-branch-chain`). Tracker `feat/rules-v1-2`; first child `feat/rules-v1-2-00-sdk`.
 - **L6** (T0): worker reproduced baseline compile failure; per-event overloads fixed SDK assignability; absent custom-run prompt maps to empty intent. Focused 50 tests, full 475, tsc and oxlint exit 0. Independent verifier S0 MET (including baseline/current source swap), parent tsc/diff-check exit 0. Native review `review-792779f655e07d98` (medium, risk/readability/reliability) approved; exact acknowledgement burned authority. Advisory IDs `R1-dep-upgrade-supply-chain`, `R3-001` are non-blocking later work. Work-unit commit `d11ed12e65eb86b26b38499fa955a9d35895815f`. Runtime fake-API harness with isolated HOME confirmed section injection on user/custom runs. Rollback: T0's 8 changed files only. No rebuild/publish performed.
 - **L7** (discovery): isolated production-discovery probe found pre-existing `read_rule` returning `Unknown rule: python.md` because raw discovered rules lack `relativePath`; pipeline derives it later. Record as prerequisite to S9 fallback, not a T0 correction (Engram 11897). Native post-commit assessment unavailable (untracked ledger scope error); earlier risk escalation item 5 drove independent verify, and native review was completed/acknowledged before commit.
+- **L8** (T1 blocker): branch `feat/rules-v1-2-01-model` created from `2213536`. Bounded worker `mvhhbpyd-3-kj25` failed: `Subagent gentle-ai-worker failed: assistant reported an error`. Result lookup provided no diagnostics. `git status --short` was empty, confirming no T1 edits. No retry or substitute verifier launched. T1 awaits an available writer or explicit permission to override the context-backstop route and implement inline. T2–T18 remain pending, not complete. No push, PR, merge or publish performed.
