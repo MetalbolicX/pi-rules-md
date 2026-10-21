@@ -30,7 +30,7 @@
  */
 import { homedir } from "node:os";
 import { conditionSpec, CONDITION_KEYS } from "../src/conditions/table.ts";
-import { evaluate } from "../src/engine.ts";
+import { evaluate, MUTED_REASON } from "../src/engine.ts";
 import { triggerPhrase } from "../src/render.ts";
 import type { GlobScanner } from "../src/match.ts";
 import { estimateTokens } from "../src/select.ts";
@@ -73,7 +73,7 @@ export interface PipelineDeps {
 
 /** Everything one injection cycle consumes. */
 export interface PipelineInput {
-	/** Session state so far (touched paths + last injected hash). */
+	/** Session state so far (touched paths, last injected hash, session mutes). */
 	readonly state: SessionState;
 	/** Current working directory. */
 	readonly cwd: string;
@@ -132,7 +132,12 @@ export const runInjectionCycle = async (input: PipelineInput): Promise<PipelineR
 			const relativePath = rule.relativePath ?? (rule.path.startsWith(prefix) ? normalizedPath(rule.path.slice(prefix.length)) : undefined);
 			return { ...rule, index, ...(relativePath === undefined ? {} : { relativePath }) };
 		});
-	const trace = await evaluate(rules, ctx, { scan: input.deps.scan, budget: input.deps.budget, prompt: input.prompt });
+	const trace = await evaluate(rules, ctx, {
+		scan: input.deps.scan,
+		budget: input.deps.budget,
+		prompt: input.prompt,
+		mutedRuleIds: input.state.mutedRuleIds,
+	});
 
 	const { block } = trace;
 	const decision = injectionDecision(block, input.state.lastInjectedHash);
@@ -160,12 +165,20 @@ const configuredLines = (rule: Rule | undefined): string[] => {
 	});
 };
 
-/** Lines for one rule outcome: active rules name their reasons, inactive ones their failure. */
+/**
+ * Lines for one rule outcome: active rules name their reasons, inactive ones
+ * their failure. A session-muted rule is excluded by an explicit user action,
+ * not by a failed condition, so its `configured:` detail lines are omitted:
+ * the report line reads exactly `inactive: <id> (muted for this session)`.
+ */
 const resultLines = (results: EvaluationTrace["results"], rules: readonly Rule[] = []): string[] =>
 	results.flatMap((result) =>
 		result.matched
 			? [`active: ${result.ruleId} (${result.reasons.map(triggerPhrase).join(" · ")})`]
-			: [`inactive: ${result.ruleId} (${result.reason})`, ...configuredLines(rules.find((rule) => rule.id === result.ruleId))],
+			: [
+					`inactive: ${result.ruleId} (${result.reason})`,
+					...(result.reason === MUTED_REASON ? [] : configuredLines(rules.find((rule) => rule.id === result.ruleId))),
+				],
 	);
 
 /** Lines for the selection outcome: every dropped rule with its cause. */
@@ -178,14 +191,16 @@ const errorLines = (errors: readonly RuleError[]): string[] =>
 
 /**
  * Renders the last evaluation as markdown lines for the /rules command:
- * per-rule active/inactive with reasons, dropped rules with causes, parse
- * errors, and a footer naming the injected section and its content hash
- * (only when a block was rendered). When `budget` is supplied (the resolved
- * selection budget), a `budget: <used>/<budget> estimated tokens` line is
- * added — `used` sums `estimateTokens` over the PINNED active bodies only,
- * never the on-demand index — plus a `section: ~<estimatedTokens> tokens`
- * line while a block exists, covering the whole rendered section including
- * the on-demand index. Omitting `budget` yields the historical report shape.
+ * per-rule active/inactive with reasons (a session-muted rule shows exactly
+ * its mute reason, with no `configured:` detail lines), dropped rules with
+ * causes, parse errors, and a footer naming the injected section and its
+ * content hash (only when a block was rendered). When `budget` is supplied
+ * (the resolved selection budget), a `budget: <used>/<budget> estimated
+ * tokens` line is added — `used` sums `estimateTokens` over the PINNED active
+ * bodies only, never the on-demand index — plus a
+ * `section: ~<estimatedTokens> tokens` line while a block exists, covering the
+ * whole rendered section including the on-demand index. Omitting `budget`
+ * yields the historical report shape.
  * Pure and deterministic — no trace means exactly one "No evaluation yet." line.
  */
 export const renderTraceReport = (

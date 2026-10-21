@@ -11,6 +11,22 @@ import { explainPath } from "./explain.ts";
 import { normalizedPath, ruleId } from "./types.ts";
 import type { Rule } from "./types.ts";
 
+describe("explainPath muted rules", () => {
+	it("reports a muted rule as excluded instead of would-activate", () => {
+		const rule = ruleWith({ id: "ts-rule", globs: ["src/**/*.ts"] });
+		const lines = explainPath([rule], "src/a.ts", { mutedRuleIds: ["ts-rule"] });
+		expect(lines).toContain("ts-rule: muted for this session (excluded from activation)");
+		expect(lines.some((line) => line.includes("would activate"))).toBe(false);
+	});
+
+	it("keeps unmuted rules unaffected by the muted list", () => {
+		const rules = [ruleWith({ id: "a", globs: ["src/**/*.ts"] }), ruleWith({ id: "b", globs: ["src/**/*.ts"] })];
+		const lines = explainPath(rules, "src/a.ts", { mutedRuleIds: ["b"] });
+		expect(lines).toContain("a: would activate — glob `src/**/*.ts`");
+		expect(lines).toContain("b: muted for this session (excluded from activation)");
+	});
+});
+
 /** Builds a minimal Rule with explicit trigger fields; defaults to a glob rule. */
 const ruleWith = (fields: {
 	readonly id?: string;

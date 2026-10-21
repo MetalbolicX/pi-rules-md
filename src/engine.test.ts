@@ -583,3 +583,85 @@ describe("evaluate — trace hygiene", () => {
 		).rejects.toThrow("scan failed");
 	});
 });
+
+describe("evaluate — session mute (v1.2)", () => {
+	it("reports a muted rule as inactive with the mute reason, before any path or condition evaluation", async () => {
+		const { scanner, calls } = scannerReturning(["src/found.ts"]);
+		const trace = await evaluate(
+			[ruleWith({ id: "muted-rule", globs: ["src/**/*.ts"], match: "exists" })],
+			contextWith({ touchedPaths: ["src/a.ts"] }),
+			{ scan: scanner, budget: 100, mutedRuleIds: ["muted-rule"] },
+		);
+		expect(trace.results).toEqual([{ matched: false, ruleId: ruleId("muted-rule"), reason: "muted for this session" }]);
+		// Nothing leaks into selection, the block, the matched paths or the scan pool.
+		expect(trace.selection).toEqual({ active: [], onDemand: [], dropped: [] });
+		expect(trace.block).toBeUndefined();
+		expect(trace.matchedPaths).toEqual([]);
+		expect(trace.estimatedTokens).toBe(0);
+		expect(calls).toEqual([]);
+	});
+
+	it("mutes an alwaysApply rule too: mute wins over the always bypass", async () => {
+		const trace = await evaluate(
+			[ruleWith({ id: "always", alwaysApply: true, content: "ALWAYS BODY" })],
+			contextWith({}),
+			{ scan: scannerReturning([]).scanner, budget: 100, mutedRuleIds: ["always"] },
+		);
+		expect(reasonOf(trace.results[0])).toBe("muted for this session");
+		expect(trace.selection.active).toEqual([]);
+		expect(trace.block).toBeUndefined();
+	});
+
+	it("reports the mute ahead of the trust gate for a muted project rule in an untrusted project", async () => {
+		const trace = await evaluate(
+			[ruleWith({ id: "proj-rule", globs: ["src/**/*.ts"], source: "project" })],
+			contextWith({ touchedPaths: ["src/a.ts"], isProjectTrusted: false }),
+			{ scan: scannerReturning([]).scanner, budget: 100, mutedRuleIds: ["proj-rule"] },
+		);
+		expect(reasonOf(trace.results[0])).toBe("muted for this session");
+	});
+
+	it("leaves every other rule untouched: reasons, selection and block are mute-independent", async () => {
+		const rules = [
+			ruleWith({ id: "muted", globs: ["src/**/*.ts"], content: "MUTED BODY" }),
+			ruleWith({ id: "kept", globs: ["docs/*.md"], content: "KEPT BODY" }),
+		];
+		const ctx = contextWith({ touchedPaths: ["src/a.ts", "docs/x.md"] });
+		const scan = scannerReturning([]).scanner;
+		const muted = await evaluate(rules, ctx, { scan, budget: 100, mutedRuleIds: ["muted"] });
+		const unmuted = await evaluate(rules, ctx, { scan, budget: 100 });
+
+		expect(muted.results[1]).toEqual(unmuted.results[1]);
+		expect(muted.results[1]).toEqual({
+			matched: true,
+			ruleId: ruleId("kept"),
+			reasons: [{ kind: "glob", pattern: "docs/*.md" }],
+		});
+		expect(muted.selection.active.map((rule) => rule.id)).toEqual([ruleId("kept")]);
+		expect(muted.block?.content).toContain("KEPT BODY");
+		expect(muted.block?.content).not.toContain("MUTED BODY");
+		expect(muted.matchedPaths).toEqual([rules[1]?.path]);
+	});
+
+	it("keeps a muted on-demand rule out of the reference index", async () => {
+		const reference = ruleWith({ id: "reference", globs: ["src/**"], load: "on-demand", relativePath: "python/style.md" });
+		const trace = await evaluate([reference], contextWith({ touchedPaths: ["src/a.ts"] }), {
+			scan: scannerReturning([]).scanner,
+			budget: 100,
+			mutedRuleIds: ["reference"],
+		});
+		expect(trace.selection.onDemand).toEqual([]);
+		expect(trace.block).toBeUndefined();
+		expect(trace.matchedPaths).toEqual([]);
+	});
+
+	it("treats an absent and an empty muted list identically (no muting)", async () => {
+		const rules = [ruleWith({ id: "a", globs: ["src/**/*.ts"], tools: ["edit"] })];
+		const ctx = contextWith({ touchedPaths: ["src/a.ts"], toolNames: ["edit"] });
+		const scan = scannerReturning([]).scanner;
+		const absent = await evaluate(rules, ctx, { scan, budget: 100 });
+		const empty = await evaluate(rules, ctx, { scan, budget: 100, mutedRuleIds: [] });
+		expect(empty).toEqual(absent);
+		expect(empty.block?.content).toBe(absent.block?.content);
+	});
+});

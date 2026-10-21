@@ -201,9 +201,26 @@ we do not parse paths from shell command strings.
   cwd-relative path treated as touched, which rules would activate and why —
   through the same `matchRule` the engine uses — with declared non-path
   conditions (tools/model/branch) shown as caveats; always-apply and non-path
-  rules are reported as path-independent. Both are read-only and never mutate
+  rules are reported as path-independent, and muted rules as session-excluded.
+  Both are read-only and never mutate
   session state; bare `/rules` output is unchanged; any other argument form
-  prints one usage line listing the subcommands.
+  prints one usage line listing show, why, mute, and unmute.
+- `/rules mute <id>` and `/rules unmute <id>` (v1.2) exclude one rule from the
+  current session, or re-include it. Mute is unconditional: it wins over both
+  `alwaysApply` and the trust gate, and a muted rule is skipped as unmatched
+  with the reason `muted for this session` before its path/conditions are
+  evaluated and before the exists-scan pool, budget selection, and the block.
+  A muted rule therefore contributes nothing — not even to the on-demand
+  index — and cannot appear as `dropped`. The `/rules` report shows it as
+  exactly `inactive: <id> (muted for this session)`, with no `configured:`
+  detail lines, because a mute is an explicit session action rather than a
+  failed condition. An id that was never discovered answers exactly
+  `Unknown rule: <id>` and changes nothing; an accepted command answers one
+  confirmation line, `muted: <id>` or `unmuted: <id>`. Muting is by rule id,
+  so a re-discovered unchanged rule stays muted, re-muting an already muted
+  rule is a no-op, and mutes survive compaction. Mute state is session state:
+  a session switch or fork clears it along with touched paths. `mute`/`unmute`
+  without exactly one id prints the usage line.
 - Rendered as one `pi-rules-md` system-prompt section: `# Rules` header,
   framing line, one entry per selected pinned rule (`## <description>`), optional
   `> Triggered by: <reasons>` when reasons exist, and `---` separators.

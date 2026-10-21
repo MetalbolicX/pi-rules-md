@@ -449,6 +449,21 @@ describe("/rules subcommands", () => {
 		expect(after["pi-rules-md"]).toBe(before["pi-rules-md"]);
 	});
 
+	it("explains a muted rule as excluded in why output", async () => {
+		const rule = ruleWith({ id: "ts-rule", globs: ["src/**/*.ts"], alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		await emitStart(api, ctx);
+
+		expect(await invokeRules(api, "mute ts-rule")).toContain("muted: ts-rule");
+		const out = await invokeRules(api, "why src/a.ts");
+		expect(out).toContain("ts-rule: muted for this session (excluded from activation)");
+		expect(out).not.toContain("would activate");
+	});
+
 	it("prints a usage line for unknown subcommands and malformed arguments", async () => {
 		const { deps } = depsWith({ rules: [] });
 		const api = fakeApi();
@@ -459,6 +474,137 @@ describe("/rules subcommands", () => {
 			expect(out).toContain("show");
 			expect(out).toContain("why");
 		}
+	});
+});
+
+describe("session mute", () => {
+	it("mutes a discovered rule for the session: confirmation, then inactive and removed on the next cycle", async () => {
+		const rule = ruleWith({ id: "always-on" });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections["pi-rules-md"]).toContain("test rule always-on");
+
+		expect(await invokeRules(api, "mute always-on")).toBe("muted: always-on");
+
+		await emitStart(api, ctx, sections);
+		expect(sections).not.toHaveProperty("pi-rules-md");
+		expect(await invokeRules(api)).toContain("inactive: always-on (muted for this session)");
+	});
+
+	it("unmutes: the rule is active again on the next cycle", async () => {
+		const rule = ruleWith({ id: "always-on" });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitStart(api, ctx);
+		await invokeRules(api, "mute always-on");
+		await emitStart(api, ctx);
+		expect(await invokeRules(api)).toContain("inactive: always-on (muted for this session)");
+
+		expect(await invokeRules(api, "unmute always-on")).toBe("unmuted: always-on");
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections["pi-rules-md"]).toContain("test rule always-on");
+		expect(await invokeRules(api)).toContain("active: always-on (always active)");
+	});
+
+	it("keeps a rule muted across re-discovery and across a second mute", async () => {
+		const rule = ruleWith({ id: "always-on" });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitStart(api, ctx);
+		await invokeRules(api, "mute always-on");
+		await emitStart(api, ctx);
+		expect(await invokeRules(api, "mute always-on")).toBe("muted: always-on");
+		await emitStart(api, ctx);
+		expect(await invokeRules(api)).toContain("inactive: always-on (muted for this session)");
+
+		await invokeRules(api, "unmute always-on");
+		await emitStart(api, ctx);
+		expect(await invokeRules(api)).toContain("active: always-on (always active)");
+	});
+
+	it("answers Unknown rule for an unknown id and leaves the rule active", async () => {
+		const rule = ruleWith({ id: "always-on" });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		expect(await invokeRules(api, "mute nope")).toBe("Unknown rule: nope");
+		expect(await invokeRules(api, "unmute nope")).toBe("Unknown rule: nope");
+
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections["pi-rules-md"]).toContain("test rule always-on");
+		expect(await invokeRules(api)).toContain("active: always-on (always active)");
+	});
+
+	it("prints a usage line listing show, why, mute and unmute for a malformed mute/unmute", async () => {
+		const { deps } = depsWith({ rules: [ruleWith({})] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		await emitStart(api, handlerCtx("/work"));
+
+		for (const args of ["mute", "unmute", "mute always-on extra", "unmute always-on extra"]) {
+			const out = await invokeRules(api, args);
+			expect(out).toContain("usage:");
+			expect(out).toContain("show <id>");
+			expect(out).toContain("why <path>");
+			expect(out).toContain("mute <id>");
+			expect(out).toContain("unmute <id>");
+		}
+	});
+
+	it("session switch and fork reset mutes with the rest of the session", async () => {
+		for (const resetEvent of [{ type: "session_before_switch" }, { type: "session_before_fork" }] as const) {
+			const rule = ruleWith({ id: "always-on" });
+			const { deps } = depsWith({ rules: [rule] });
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx("/work");
+
+			await emitStart(api, ctx);
+			await invokeRules(api, "mute always-on");
+			await emitStart(api, ctx);
+			expect(await invokeRules(api)).toContain("inactive: always-on (muted for this session)");
+
+			await emitSignal(api, resetEvent, ctx);
+			const sections: Record<string, string> = {};
+			await emitStart(api, ctx, sections);
+			expect(sections["pi-rules-md"]).toContain("test rule always-on");
+			expect(await invokeRules(api)).toContain("active: always-on (always active)");
+		}
+	});
+
+	it("does not touch the /rules report for rules that are not muted", async () => {
+		const rules = [ruleWith({ id: "a-rule" }), ruleWith({ id: "b-rule" })];
+		const { deps } = depsWith({ rules });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitStart(api, ctx);
+		await invokeRules(api, "mute a-rule");
+		await emitStart(api, ctx);
+		const report = await invokeRules(api);
+		const lines = report.split("\n");
+		expect(lines).toContain("inactive: a-rule (muted for this session)");
+		expect(lines).toContain("active: b-rule (always active)");
+		expect(lines).not.toContain("active: a-rule (always active)");
+		expect(lines.some((line) => line.startsWith("dropped: a-rule"))).toBe(false);
+		// A mute is a session action, not a condition outcome: no `configured:` noise.
+		expect(report).not.toContain("configured:");
 	});
 });
 

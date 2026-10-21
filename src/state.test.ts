@@ -1,7 +1,7 @@
 /**
  * Tests for the pure session-state reducer: touched-path accumulation
  * (first-seen order, exact-string dedupe), injection-hash hysteresis,
- * compact/reset semantics, and forward-compat totality.
+ * session mute/unmute, compact/reset semantics, and forward-compat totality.
  *
  * Pure behavior only: no I/O, no time, no randomness. Mutation tests
  * deep-freeze their inputs so any attempt to mutate state or events is
@@ -29,8 +29,8 @@ const deepFreeze = <T>(value: T): T => {
 };
 
 describe("initialState", () => {
-	it("starts with no touched paths and no injected hash", () => {
-		expect(initialState).toEqual({ touchedPaths: [], lastInjectedHash: undefined });
+	it("starts with no touched paths, no injected hash and no muted rules", () => {
+		expect(initialState).toEqual({ touchedPaths: [], lastInjectedHash: undefined, mutedRuleIds: [] });
 	});
 });
 
@@ -73,13 +73,13 @@ describe("transition — paths_touched", () => {
 	});
 
 	it("returns a value-equal state for an empty paths array", () => {
-		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "hash" };
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "hash", mutedRuleIds: [] };
 		const next = transition(state, { type: "paths_touched", paths: [] });
 		expect(next).toEqual(state);
 	});
 
 	it("keeps the last injected hash when merging paths", () => {
-		const injected: SessionState = { touchedPaths: [], lastInjectedHash: "hash-1" };
+		const injected: SessionState = { touchedPaths: [], lastInjectedHash: "hash-1", mutedRuleIds: [] };
 		const next = transition(injected, { type: "paths_touched", paths: [normalizedPath("src/a.ts")] });
 		expect(next.lastInjectedHash).toBe("hash-1");
 	});
@@ -87,13 +87,13 @@ describe("transition — paths_touched", () => {
 
 describe("transition — block_injected", () => {
 	it("sets the last injected hash and keeps touched paths", () => {
-		const touched: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined };
+		const touched: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [] };
 		const next = transition(touched, { type: "block_injected", contentHash: "abc123" });
-		expect(next).toEqual({ touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123" });
+		expect(next).toEqual({ touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123", mutedRuleIds: [] });
 	});
 
 	it("overwrites a previous hash", () => {
-		const injected: SessionState = { touchedPaths: [], lastInjectedHash: "old" };
+		const injected: SessionState = { touchedPaths: [], lastInjectedHash: "old", mutedRuleIds: [] };
 		const next = transition(injected, { type: "block_injected", contentHash: "new" });
 		expect(next.lastInjectedHash).toBe("new");
 	});
@@ -101,20 +101,20 @@ describe("transition — block_injected", () => {
 
 describe("transition — block_removed", () => {
 	it("clears the injected hash but keeps touched paths", () => {
-		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123" };
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123", mutedRuleIds: [] };
 		const next = transition(state, { type: "block_removed" });
-		expect(next).toEqual({ touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined });
+		expect(next).toEqual({ touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [] });
 	});
 
 	it("returns the value-equal, shared state when the hash is already undefined", () => {
-		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined };
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [] };
 		const next = transition(state, { type: "block_removed" });
 		expect(next).toBe(state);
 		expect(next).toEqual(state);
 	});
 
 	it("never mutates deep-frozen state or event inputs", () => {
-		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123" };
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123", mutedRuleIds: [] };
 		const event: StateEvent = { type: "block_removed" };
 		deepFreeze(state);
 		deepFreeze(event);
@@ -131,23 +131,107 @@ describe("transition — block_removed", () => {
 
 describe("transition — session_compact", () => {
 	it("clears the hash but keeps touched paths for post-compact re-injection", () => {
-		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123" };
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123", mutedRuleIds: [] };
 		const next = transition(state, { type: "session_compact" });
-		expect(next).toEqual({ touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined });
+		expect(next).toEqual({ touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [] });
+	});
+
+	it("keeps session mutes: compaction is not a session switch", () => {
+		const state: SessionState = {
+			touchedPaths: [],
+			lastInjectedHash: "abc123",
+			mutedRuleIds: ["muted-rule"],
+		};
+		const next = transition(state, { type: "session_compact" });
+		expect(next.mutedRuleIds).toEqual(["muted-rule"]);
 	});
 });
 
 describe("transition — session_reset", () => {
 	it("returns a value-equal initialState (session switch/fork)", () => {
-		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123" };
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123", mutedRuleIds: [] };
 		const next = transition(state, { type: "session_reset" });
 		expect(next).toEqual(initialState);
+	});
+
+	it("drops session mutes with everything else (switch/fork start unmuted)", () => {
+		const muted: SessionState = {
+			touchedPaths: [normalizedPath("src/a.ts")],
+			lastInjectedHash: "abc123",
+			mutedRuleIds: ["a-rule", "b-rule"],
+		};
+		const next = transition(muted, { type: "session_reset" });
+		expect(next.mutedRuleIds).toEqual([]);
+	});
+});
+
+describe("transition — rules_muted", () => {
+	it("appends the rule id, keeping touched paths and the injected hash", () => {
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123", mutedRuleIds: [] };
+		const next = transition(state, { type: "rules_muted", ruleId: "noisy-rule" });
+		expect(next).toEqual({
+			touchedPaths: [normalizedPath("src/a.ts")],
+			lastInjectedHash: "abc123",
+			mutedRuleIds: ["noisy-rule"],
+		});
+	});
+
+	it("appends in first-mute order and keeps the set deduped", () => {
+		const once = transition(initialState, { type: "rules_muted", ruleId: "b-rule" });
+		const twice = transition(once, { type: "rules_muted", ruleId: "a-rule" });
+		expect(twice.mutedRuleIds).toEqual(["b-rule", "a-rule"]);
+	});
+
+	it("is a value-level no-op for an already muted rule (same reference)", () => {
+		const muted = transition(initialState, { type: "rules_muted", ruleId: "noisy-rule" });
+		const again = transition(muted, { type: "rules_muted", ruleId: "noisy-rule" });
+		expect(again).toBe(muted);
+		expect(again.mutedRuleIds).toEqual(["noisy-rule"]);
+	});
+
+	it("never mutates deep-frozen state or event inputs", () => {
+		const state: SessionState = { touchedPaths: [], lastInjectedHash: undefined, mutedRuleIds: ["first"] };
+		const event: StateEvent = { type: "rules_muted", ruleId: "second" };
+		deepFreeze(state);
+		deepFreeze(event);
+
+		const next = transition(state, event);
+
+		expect(Object.isFrozen(state.mutedRuleIds)).toBe(true);
+		expect(state.mutedRuleIds).toEqual(["first"]);
+		expect(event).toEqual({ type: "rules_muted", ruleId: "second" });
+		expect(next.mutedRuleIds).toEqual(["first", "second"]);
+		expect(state.mutedRuleIds).not.toBe(next.mutedRuleIds);
+	});
+});
+
+describe("transition — rules_unmuted", () => {
+	it("removes the rule id, keeping the muted order of the rest", () => {
+		const state: SessionState = { touchedPaths: [], lastInjectedHash: undefined, mutedRuleIds: ["a-rule", "b-rule", "c-rule"] };
+		const next = transition(state, { type: "rules_unmuted", ruleId: "b-rule" });
+		expect(next.mutedRuleIds).toEqual(["a-rule", "c-rule"]);
+		expect(next.touchedPaths).toEqual([]);
+		expect(next.lastInjectedHash).toBeUndefined();
+	});
+
+	it("is a value-level no-op for a rule that is not muted (same reference)", () => {
+		const state: SessionState = { touchedPaths: [], lastInjectedHash: "abc123", mutedRuleIds: ["a-rule"] };
+		expect(transition(state, { type: "rules_unmuted", ruleId: "other-rule" })).toBe(state);
+		expect(transition(initialState, { type: "rules_unmuted", ruleId: "a-rule" })).toBe(initialState);
+	});
+
+	it("round-trips mute → unmute back to the same muted set", () => {
+		const muted = transition(initialState, { type: "rules_muted", ruleId: "a-rule" });
+		const unmuted = transition(muted, { type: "rules_unmuted", ruleId: "a-rule" });
+		expect(unmuted.mutedRuleIds).toEqual([]);
+		const remuted = transition(unmuted, { type: "rules_muted", ruleId: "a-rule" });
+		expect(remuted.mutedRuleIds).toEqual(["a-rule"]);
 	});
 });
 
 describe("transition — unknown event (forward compatibility)", () => {
 	it("returns the same state for a foreign event kind, never throwing", () => {
-		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123" };
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "abc123", mutedRuleIds: [] };
 		const foreign = { type: "session_hologram", payload: 42 } as unknown as StateEvent;
 		expect(transition(state, foreign)).toBe(state);
 	});
@@ -155,7 +239,7 @@ describe("transition — unknown event (forward compatibility)", () => {
 
 describe("transition — purity", () => {
 	it("never mutates deep-frozen state or event inputs", () => {
-		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined };
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [] };
 		const pathsEvent: StateEvent = {
 			type: "paths_touched",
 			paths: [normalizedPath("src/b.ts"), normalizedPath("src/a.ts")],
@@ -179,15 +263,17 @@ describe("transition — purity", () => {
 
 		expect(afterPaths.touchedPaths).toEqual([normalizedPath("src/a.ts"), normalizedPath("src/b.ts")]);
 		expect(afterPaths).not.toBe(state);
-		expect(afterHash).toEqual({ touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "hash" });
+		expect(afterHash).toEqual({ touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: "hash", mutedRuleIds: [] });
 	});
 
 	it("folding a sequence of events equals stepping through them one by one", () => {
 		const events: readonly StateEvent[] = [
 			{ type: "paths_touched", paths: [normalizedPath("src/a.ts")] },
 			{ type: "block_injected", contentHash: "hash-1" },
+			{ type: "rules_muted", ruleId: "muted-rule" },
 			{ type: "paths_touched", paths: [normalizedPath("src/b.ts"), normalizedPath("src/a.ts")] },
 			{ type: "session_compact" },
+			{ type: "rules_unmuted", ruleId: "muted-rule" },
 			{ type: "block_injected", contentHash: "hash-2" },
 			{ type: "session_reset" },
 			{ type: "paths_touched", paths: [normalizedPath("src/c.ts")] },
@@ -200,6 +286,6 @@ describe("transition — purity", () => {
 		}
 
 		expect(folded).toEqual(stepped);
-		expect(folded).toEqual({ touchedPaths: [normalizedPath("src/c.ts")], lastInjectedHash: undefined });
+		expect(folded).toEqual({ touchedPaths: [normalizedPath("src/c.ts")], lastInjectedHash: undefined, mutedRuleIds: [] });
 	});
 });

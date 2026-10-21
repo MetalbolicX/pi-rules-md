@@ -184,6 +184,11 @@ updated with `pi-rules update`.
   enforcement, and body.
 - `/rules why <path>` — which rules a given path would activate and why
   (read-only; non-path conditions appear as caveats).
+- `/rules mute <id>` / `/rules unmute <id>` — exclude or re-include one rule
+  for the current session. A muted rule reports
+  `inactive: <id> (muted for this session)` and stays out of the injected
+  section; mutes reset on session switch/fork. Unknown ids answer
+  `Unknown rule: <id>`.
 
 ## Trust model
 

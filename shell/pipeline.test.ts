@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("node:os", () => ({ homedir: () => "C:/Users/x" }));
-import { initialState } from "../src/state.ts";
+import { initialState, transition } from "../src/state.ts";
 import type { SessionState } from "../src/state.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
 import type { Rule, RuleError } from "../src/types.ts";
@@ -151,7 +151,14 @@ describe("runInjectionCycle", () => {
 
 		const empty = depsWith([]);
 		const second = await runInjectionCycle(
-			inputWith({ touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: first.block?.contentHash }, empty.deps),
+			inputWith(
+				{
+					touchedPaths: [normalizedPath("src/a.ts")],
+					lastInjectedHash: first.block?.contentHash,
+					mutedRuleIds: [],
+				},
+				empty.deps,
+			),
 		);
 		expect(second.decision).toEqual({ action: "remove" });
 		expect(second.block).toBeUndefined();
@@ -201,8 +208,8 @@ describe("runInjectionCycle", () => {
 	});
 
 	it("is deterministic: equal inputs give deep-equal outputs and never mutate the input state", async () => {
-		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined };
-		const snapshot: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined };
+		const state: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [] };
+		const snapshot: SessionState = { touchedPaths: [normalizedPath("src/a.ts")], lastInjectedHash: undefined, mutedRuleIds: [] };
 		const { deps } = depsWith([ruleWith({ id: "always-on" })]);
 		const input = inputWith(state, deps);
 
@@ -213,6 +220,59 @@ describe("runInjectionCycle", () => {
 		expect(first.nextState).not.toBe(state);
 		// The input state object is untouched by either run.
 		expect(state).toEqual(snapshot);
+	});
+
+	describe("session mute (v1.2)", () => {
+		it("threads mutes from the input state: the muted rule is inactive and its section is removed", async () => {
+			const rule = ruleWith({ id: "always-on" });
+			const { deps } = depsWith([rule]);
+			const first = await runInjectionCycle(inputWith(initialState, deps));
+			expect(first.decision).toEqual({ action: "patch" });
+
+			const mutedState = transition(first.nextState, { type: "rules_muted", ruleId: "always-on" });
+			const second = await runInjectionCycle(inputWith(mutedState, deps));
+
+			expect(second.trace.results).toEqual([{ matched: false, ruleId: rule.id, reason: "muted for this session" }]);
+			expect(second.trace.selection.active).toEqual([]);
+			expect(second.block).toBeUndefined();
+			expect(second.decision).toEqual({ action: "remove" });
+			// The mute survives the cycle: only the injection decision is folded.
+			expect(second.nextState.mutedRuleIds).toEqual(["always-on"]);
+			expect(second.nextState.lastInjectedHash).toBeUndefined();
+			const report = renderTraceReport(second.trace, [], [rule]);
+			expect(report).toContain("inactive: always-on (muted for this session)");
+			// The mute reason stands alone: no `configured:` detail lines follow.
+			expect(report).not.toContain("  configured:");
+		});
+
+		it("re-includes the rule on the cycle after an unmute", async () => {
+			const rule = ruleWith({ id: "always-on", content: "BODY TEXT\n" });
+			const { deps } = depsWith([rule]);
+			const muted = transition(initialState, { type: "rules_muted", ruleId: "always-on" });
+			const mutedRun = await runInjectionCycle(inputWith(muted, deps));
+			expect(mutedRun.block).toBeUndefined();
+
+			const unmuted = transition(mutedRun.nextState, { type: "rules_unmuted", ruleId: "always-on" });
+			const run = await runInjectionCycle(inputWith(unmuted, deps));
+			expect(run.decision).toEqual({ action: "patch" });
+			expect(run.trace.selection.active.map((active) => active.id)).toEqual([rule.id]);
+			expect(run.nextState.mutedRuleIds).toEqual([]);
+			expect(renderTraceReport(run.trace, [], [rule])).toContain("active: always-on (always active)");
+		});
+
+		it("keeps the mute across re-discovery: a re-discovered unchanged rule stays muted", async () => {
+			const rule = ruleWith({ id: "always-on" });
+			const { deps, recorded } = depsWith([rule]);
+			const muted = transition(initialState, { type: "rules_muted", ruleId: "always-on" });
+			const first = await runInjectionCycle(inputWith(muted, deps));
+			const second = await runInjectionCycle(inputWith(first.nextState, deps));
+
+			// Muting is by id, so a fresh discovery result for the same id keeps it off.
+			expect(recorded.discoverCalls).toHaveLength(2);
+			expect(second.trace.results[0]?.matched).toBe(false);
+			expect(second.block).toBeUndefined();
+			expect(second.nextState.mutedRuleIds).toEqual(["always-on"]);
+		});
 	});
 
 	describe("renderTraceReport", () => {

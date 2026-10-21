@@ -211,10 +211,27 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 					return;
 				}
 				if (sub === "why" && rest.length >= 1) {
-					ctx.ui.notify(explainPath(lastDiscoveredRules, rest.join(" ")).join("\n"), "info");
+					ctx.ui.notify(explainPath(lastDiscoveredRules, rest.join(" "), { mutedRuleIds: state.mutedRuleIds }).join("\n"), "info");
 					return;
 				}
-				ctx.ui.notify("usage: /rules [show <id> | why <path>] — bare /rules prints the full evaluation report", "info");
+				// Session mute (S5): validate the id like `show` does, then fold the
+				// state event. The exclusion applies from the next cycle on, and
+				// session switch/fork clears it with the rest of the session state.
+				if ((sub === "mute" || sub === "unmute") && rest.length === 1) {
+					const id = rest[0] ?? "";
+					if (!lastDiscoveredRules.some((candidate) => candidate.id === id)) {
+						ctx.ui.notify(`Unknown rule: ${id}`, "info");
+						return;
+					}
+					const muted = sub === "mute";
+					state = transition(state, muted ? { type: "rules_muted", ruleId: id } : { type: "rules_unmuted", ruleId: id });
+					ctx.ui.notify(`${muted ? "muted" : "unmuted"}: ${id}`, "info");
+					return;
+				}
+				ctx.ui.notify(
+					"usage: /rules [show <id> | why <path> | mute <id> | unmute <id>] — bare /rules prints the full evaluation report",
+					"info",
+				);
 			},
 		});
 	};

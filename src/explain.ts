@@ -31,9 +31,16 @@ const caveatLines = (rule: Rule, prefix: string): readonly string[] =>
  * each discovered rule would do and why — in discovery order. Always-active
  * rules and non-path rules (tools/model/branch triggers, no globs) are called
  * out as path-independent instead of pretending the path activated them.
+ * Muted rules (opts.mutedRuleIds) are reported as session-excluded: mute wins
+ * over every condition, so "would activate" would be false.
  */
-export const explainPath = (rules: readonly Rule[], rawPath: string): readonly string[] => {
+export const explainPath = (
+	rules: readonly Rule[],
+	rawPath: string,
+	opts?: { readonly mutedRuleIds?: readonly string[] },
+): readonly string[] => {
 	const path: NormalizedPath = normalizedPath(rawPath);
+	const muted = new Set(opts?.mutedRuleIds ?? []);
 	const ctx: EvaluationContext = {
 		now: 0,
 		cwd: normalizedPath("/"),
@@ -44,6 +51,10 @@ export const explainPath = (rules: readonly Rule[], rawPath: string): readonly s
 	};
 	const lines: string[] = [`why ${path} (treated as touched this session):`];
 	for (const rule of rules) {
+		if (muted.has(rule.id)) {
+			lines.push(`${rule.id}: muted for this session (excluded from activation)`);
+			continue;
+		}
 		if (rule.alwaysApply) {
 			lines.push(`${rule.id}: always active (path-independent)`);
 			continue;

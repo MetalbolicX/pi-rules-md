@@ -3,6 +3,12 @@
  *
  * `evaluate` composes the existing pure stages into one total call:
  *
+ * 0. Session mute (v1.2) — a rule whose id appears in `mutedRuleIds` is
+ *    skipped as unmatched with the reason `muted for this session`, BEFORE
+ *    the trust gate, the scan pool and every path/condition check. Mute is
+ *    the user's explicit per-session exclusion, so it wins over
+ *    `alwaysApply` and over an untrusted-project verdict; a muted rule
+ *    contributes nothing else — not even scan work on its behalf.
  * 1. Trust gate (defense-in-depth) — project-source rules are skipped as
  *    unmatched, with a reason naming the untrusted project, when the project
  *    is not trusted. Discovery (shell task 10) gates too; the engine never
@@ -38,7 +44,7 @@ import { renderSection } from "./render.ts";
 import { selectRules } from "./select.ts";
 import type { EvaluationContext, EvaluationTrace, MatchReason, MatchResult, Rule } from "./types.ts";
 
-/** Injected options for `evaluate`: the scan seam and the token budget. */
+/** Injected options for `evaluate`: the scan seam, the token budget and session mutes. */
 export interface EvaluationOptions {
 	/** Project scan resolving the rules' positive globs (exists matching). */
 	readonly scan: GlobScanner;
@@ -46,11 +52,19 @@ export interface EvaluationOptions {
 	readonly budget: number;
 	/** Current turn prompt used only for intent preload detection. */
 	readonly prompt?: string;
+	/** Rule ids muted for this session (S5); absent/empty means no muting. */
+	readonly mutedRuleIds?: readonly string[];
 }
+
+/** The exact reason a session-muted rule reports (S5); the /rules report keys off it. */
+export const MUTED_REASON = "muted for this session";
 
 /** Trust gate (defense-in-depth): project rules require a trusted project. */
 const isTrustGated = (rule: Rule, ctx: EvaluationContext): boolean =>
 	rule.source === "project" && !ctx.isProjectTrusted;
+
+/** Session-muted result: reported ahead of the trust gate and any evaluation. */
+const mutedResult = (rule: Rule): MatchResult => ({ matched: false, ruleId: rule.id, reason: MUTED_REASON });
 
 /** Unmatched result for a trust-gated rule; names the untrusted project. */
 const trustGateResult = (rule: Rule, ctx: EvaluationContext): MatchResult => ({
@@ -122,22 +136,29 @@ export const evaluate = async (
 	ctx: EvaluationContext,
 	opts: EvaluationOptions,
 ): Promise<EvaluationTrace> => {
+	// 0. Session mutes, by id; the set keeps the per-rule check O(1).
+	const mutedRuleIds = new Set(opts.mutedRuleIds ?? []);
+
 	// 2. Enrich a copy of the context — scanning ONLY for rules whose match
-	// mode consults existing paths; trust-gated rules are excluded entirely.
+	// mode consults existing paths; muted and trust-gated rules are excluded
+	// entirely.
 	const intentGlobs = opts.prompt === undefined ? [] : detectIntentGlobs(opts.prompt, rules);
 	const intentContext: EvaluationContext = { ...ctx, intentGlobs };
-	const candidates = rules.filter((rule) => !isTrustGated(rule, ctx));
+	const candidates = rules.filter((rule) => !mutedRuleIds.has(rule.id) && !isTrustGated(rule, ctx));
 	const enriched = await withExistingPaths(
 		intentContext,
 		candidates.filter((rule) => rule.match === "exists" || rule.match === "both"),
 		opts.scan,
 	);
 
-	// 3–4. Final merged outcome per rule, in rule order.
+	// 3–4. Final merged outcome per rule, in rule order: mute → trust gate →
+	// path/condition evaluation.
 	const outcomes = rules.map((rule) =>
-		isTrustGated(rule, ctx)
-			? { rule, result: trustGateResult(rule, ctx) }
-			: { rule, result: evaluateRule(rule, enriched) },
+		mutedRuleIds.has(rule.id)
+			? { rule, result: mutedResult(rule) }
+			: isTrustGated(rule, ctx)
+				? { rule, result: trustGateResult(rule, ctx) }
+				: { rule, result: evaluateRule(rule, enriched) },
 	);
 	const results = outcomes.map((outcome) => outcome.result);
 
