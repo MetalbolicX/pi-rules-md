@@ -16,7 +16,10 @@ Functional core / imperative shell; pure functions and data, no classes.
    cached by mtime.
 2. **Matching** — each rule's activation is evaluated against the live
    session: touched paths, existing files, selected tools, current model, git
-   branch, and prompt-derived intent.
+   branch, and prompt-derived intent. The `exists` file scan is cached per
+   working directory and glob set, and re-run only after a `write`, `edit`, or
+   `bash` tool result or a glob-set change — see
+   [Exists-scan cache](RULE-SPEC.md#exists-scan-cache).
 3. **Selection** — pinned rule bodies are content-deduped, budgeted, and
    ordered for presentation. On-demand rules are listed by path instead of
    having their bodies injected.
@@ -163,6 +166,18 @@ The shell parses the override with `parseInt`; a missing value, a value that
 parses to `NaN`, or a non-positive parsed value uses the default. On-demand
 bodies do not consume this budget; their rendered index contributes to the
 final token estimate.
+
+## Exists-scan cache
+
+`exists` rules ask the project scanner for their globs on every turn. That
+answer is cached per working directory and glob set, so consecutive turns reuse
+one scan instead of re-walking the tree; the cache is dropped after a
+completed `write`, `edit`, or `bash` tool result (the only results that can
+change which files exist) or when the glob set changes. Results are identical
+to an uncached scan, and `.gitignore` handling is unchanged — caching only
+avoids repeating the same read. The full contract, including the staleness
+window for changes made outside the agent, is in
+[RULE-SPEC.md §5](RULE-SPEC.md#exists-scan-cache).
 
 ## Session persistence
 

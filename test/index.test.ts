@@ -20,6 +20,8 @@ import type {
 	RulesCommandOptions,
 } from "../index.ts";
 import type { PiEventShape } from "../shell/collectors.ts";
+import { globMatcher } from "../src/conditions/predicates.ts";
+import { createCachedScanner } from "../shell/scan-cache.ts";
 import type { ReadRuleToolDefinition } from "../shell/read-rule.ts";
 import { DEFAULT_BUDGET_TOKENS } from "../shell/pipeline.ts";
 import type { DiscoverOptions } from "../shell/pipeline.ts";
@@ -144,12 +146,61 @@ const toolExecutionStart = (toolName: string, path: string): PiEventShape => ({
 	args: { path },
 } as PiEventShape);
 
+/** Post-execution event fixture (pi 1.3.0 `ToolResultEventBase`). */
+const toolResult = (toolName: string, path?: string): PiEventShape => ({
+	type: "tool_result",
+	toolCallId: "call-1",
+	toolName,
+	input: path === undefined ? {} : { path },
+});
+
+/** One recorded underlying scan invocation. */
+interface ScanCall {
+	readonly patterns: readonly string[];
+	readonly cwd: string;
+}
+
+/**
+ * Faked ExtensionDeps wired exactly like the production composition root: the
+ * pipeline scanner is a `createCachedScanner` wrapper, and the same cache's
+ * `invalidate` is handed to the wiring as the post-tool effect. The underlying
+ * scanner records every real scan and resolves against a mutable file set, so a
+ * test sees both the call count and the scan result change.
+ */
+const depsWithScan = (opts: {
+	readonly rules: readonly Rule[];
+	readonly files?: readonly string[];
+}): {
+	readonly deps: ExtensionDeps;
+	readonly files: Set<string>;
+	readonly scanCalls: ScanCall[];
+} => {
+	const files = new Set<string>(opts.files ?? []);
+	const scanCalls: ScanCall[] = [];
+	const cache = createCachedScanner(async (patterns, cwd) => {
+		scanCalls.push({ patterns: [...patterns], cwd });
+		return [...files].filter((path) => globMatcher(patterns)(normalizedPath(path)));
+	});
+	const deps: ExtensionDeps = {
+		pipeline: {
+			discover: async () => ({ rules: opts.rules, errors: [] }),
+			scan: cache.scanner,
+			budget: DEFAULT_BUDGET_TOKENS,
+		},
+		now: () => NOW,
+		invalidateScan: cache.invalidate,
+	};
+	return { deps, files, scanCalls };
+};
+
 /** Faked ExtensionDeps: discover yields the given rules/errors, scan nothing. */
 const depsWith = (opts: { readonly rules: readonly Rule[]; readonly errors?: readonly RuleError[]; readonly budget?: number }): {
 	readonly deps: ExtensionDeps;
 	readonly discoverCalls: DiscoverOptions[];
+	readonly invalidations: () => number;
 } => {
 	const discoverCalls: DiscoverOptions[] = [];
+	let invalidationCount = 0;
 	const deps: ExtensionDeps = {
 		pipeline: {
 			discover: async (discoverOpts) => {
@@ -160,8 +211,12 @@ const depsWith = (opts: { readonly rules: readonly Rule[]; readonly errors?: rea
 			budget: opts.budget ?? DEFAULT_BUDGET_TOKENS,
 		},
 		now: () => NOW,
+		// These tests scan nothing, so the cache invalidator only counts calls.
+		invalidateScan: () => {
+			invalidationCount += 1;
+		},
 	};
-	return { deps, discoverCalls };
+	return { deps, discoverCalls, invalidations: () => invalidationCount };
 };
 
 /** One recorded fake exec invocation. */
@@ -294,7 +349,7 @@ const invokeRules = async (api: ReturnType<typeof fakeApi>, args = ""): Promise<
 };
 
 describe("createRulesExtension registration", () => {
-	it("subscribes exactly the six signal events plus before_agent_start and registers /rules", () => {
+	it("subscribes exactly the six signal events plus tool_result and before_agent_start, and registers /rules", () => {
 		const { deps } = depsWith({ rules: [] });
 		const api = fakeApi();
 		createRulesExtension(deps)(api.api);
@@ -306,6 +361,7 @@ describe("createRulesExtension registration", () => {
 			"session_start",
 			"session_tree",
 			"tool_execution_start",
+			"tool_result",
 		]);
 		for (const handlers of api.signals.values()) {
 			expect(handlers).toHaveLength(1);
@@ -1001,5 +1057,147 @@ describe("session persistence (S7)", () => {
 		const sections: Record<string, string> = {};
 		await emitStart(api, ctx, sections);
 		expect(sections["pi-rules-md"]).toContain("test rule touched-rule");
+	});
+});
+
+describe("exists-scan cache (S8)", () => {
+	const existsRule = (): Rule => ruleWith({ id: "exists-rule", globs: ["src/**/*.ts"], match: "exists", alwaysApply: false });
+
+	it("scans once for two cycles when no mutating tool result lands in between", async () => {
+		const { deps, scanCalls } = depsWithScan({ rules: [existsRule()], files: ["src/a.ts"] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections["pi-rules-md"]).toContain("test rule exists-rule");
+		await emitStart(api, ctx, sections);
+
+		// Two evaluations, one underlying scan: the second cycle is a cache hit.
+		expect(scanCalls).toEqual([{ patterns: ["src/**/*.ts"], cwd: normalizedPath("/work") }]);
+	});
+
+	it("re-scans after a write, edit, or bash tool result", async () => {
+		for (const toolName of ["write", "edit", "bash"]) {
+			const { deps, scanCalls } = depsWithScan({ rules: [existsRule()], files: ["src/a.ts"] });
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx("/work");
+
+			await emitStart(api, ctx);
+			expect(scanCalls, toolName).toHaveLength(1);
+
+			await emitSignal(api, toolResult(toolName, "/work/src/a.ts"), ctx);
+			await emitStart(api, ctx);
+			expect(scanCalls, toolName).toHaveLength(2);
+		}
+	});
+
+	it("keeps the cached scan for read, grep, find, ls, and unknown tool results", async () => {
+		for (const toolName of ["read", "grep", "find", "ls", "custom"]) {
+			const { deps, scanCalls } = depsWithScan({ rules: [existsRule()], files: ["src/a.ts"] });
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx("/work");
+
+			await emitStart(api, ctx);
+			await emitSignal(api, toolResult(toolName, "/work/src/a.ts"), ctx);
+			await emitStart(api, ctx);
+
+			expect(scanCalls, toolName).toHaveLength(1);
+		}
+	});
+
+	it("calls the invalidator once per mutating tool result and never for read-only ones", async () => {
+		const { deps, invalidations } = depsWith({ rules: [] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitSignal(api, toolResult("write"), ctx);
+		await emitSignal(api, toolResult("bash"), ctx);
+		expect(invalidations()).toBe(2);
+
+		for (const toolName of ["read", "grep", "find", "ls", "custom"]) {
+			await emitSignal(api, toolResult(toolName), ctx);
+		}
+		expect(invalidations()).toBe(2);
+	});
+
+	it("never invalidates from a pre-execution tool_execution_start", async () => {
+		const { deps, scanCalls } = depsWithScan({ rules: [existsRule()], files: ["src/a.ts"] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitStart(api, ctx);
+		// A write is announced before it runs; only its RESULT can change the disk.
+		await emitSignal(api, toolExecutionStart("write", "/work/src/a.ts"), ctx);
+		await emitStart(api, ctx);
+
+		expect(scanCalls).toHaveLength(1);
+	});
+
+	it("re-scans when the pattern set changes between cycles", async () => {
+		const rules: Rule[] = [existsRule()];
+		const { deps, scanCalls } = depsWithScan({ rules, files: ["src/a.ts", "lib/b.ts"] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections["pi-rules-md"]).toContain("test rule exists-rule");
+		expect(scanCalls[0]?.patterns).toEqual(["src/**/*.ts"]);
+
+		// A newly discovered rule widens the deduplicated pattern set: that is a new
+		// cache key, so the next cycle scans even though no file changed.
+		rules.push(ruleWith({ id: "lib-rule", globs: ["lib/**/*.ts"], match: "exists", alwaysApply: false }));
+		await emitStart(api, ctx, sections);
+		expect(scanCalls).toHaveLength(2);
+		expect(scanCalls[1]?.patterns).toEqual(["src/**/*.ts", "lib/**/*.ts"]);
+		expect(sections["pi-rules-md"]).toContain("test rule lib-rule");
+	});
+
+	it("sees a file created by a write tool result on the next cycle", async () => {
+		const { deps, files } = depsWithScan({ rules: [existsRule()], files: [] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		const before: Record<string, string> = {};
+		await emitStart(api, ctx, before);
+		expect(before).not.toHaveProperty("pi-rules-md");
+
+		files.add("src/new.ts");
+		await emitSignal(api, toolResult("write", "/work/src/new.ts"), ctx);
+
+		const after: Record<string, string> = {};
+		await emitStart(api, ctx, after);
+		expect(after["pi-rules-md"]).toContain("test rule exists-rule");
+	});
+
+	it("mutates no session state on a tool_result: no entries, no touched paths, no report change", async () => {
+		const touched = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false });
+		const { deps } = depsWith({ rules: [touched] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitStart(api, ctx);
+		const reportBefore = await invokeRules(api);
+
+		await emitSignal(api, toolResult("write", "/work/src/a.ts"), ctx);
+
+		// A completed write is not a touch batch (pre-execution owns that), so the
+		// result must reach neither the reducer nor the session entries.
+		expect(api.entries).toEqual([]);
+		expect(await invokeRules(api)).toBe(reportBefore);
+
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections).not.toHaveProperty("pi-rules-md");
+		expect(await invokeRules(api)).toContain("inactive: touched-rule");
 	});
 });

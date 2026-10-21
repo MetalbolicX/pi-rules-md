@@ -31,6 +31,11 @@
  *   (`dist/core/extensions/types.d.ts:223`), whose `getBranch(fromId?)`
  *   (`dist/core/session-manager.d.ts:311`) walks root → leaf. The rebuild seam
  *   consumes only `getBranch`.
+ * - `on("tool_result", …)` is an `ExtensionHandler<ToolResultEvent, …>`
+ *   (`dist/core/extensions/types.d.ts:1225` for the subscription;
+ *   `ToolResultEventBase` at `:985-1005`, union at `:1037`). Only `toolName` is
+ *   consumed: a `write`/`edit`/`bash` result can change the filesystem, so it
+ *   invalidates the exists-scan cache (S8). Nothing about a result is folded.
  */
 import { homedir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -43,6 +48,7 @@ import { resolveBranch } from "./shell/git-branch.ts";
 import type { ExecLike } from "./shell/git-branch.ts";
 import { createReadRuleTool } from "./shell/read-rule.ts";
 import type { ReadRuleToolDefinition } from "./shell/read-rule.ts";
+import { createCachedScanner } from "./shell/scan-cache.ts";
 import { DEFAULT_BUDGET_TOKENS, renderTraceReport, runInjectionCycle } from "./shell/pipeline.ts";
 import { globalRulesDir, projectRulesDir, resolveBudget } from "./shell/rules-paths.ts";
 import type { PipelineDeps } from "./shell/pipeline.ts";
@@ -116,6 +122,7 @@ export type SignalHandler = (event: PiEventShape, ctx: ExtensionContextLike) => 
  */
 export interface PiExtensionApiLike {
 	on(event: "tool_execution_start", handler: SignalHandler): unknown;
+	on(event: "tool_result", handler: SignalHandler): unknown;
 	on(event: "session_compact", handler: SignalHandler): unknown;
 	on(event: "session_before_switch", handler: SignalHandler): unknown;
 	on(event: "session_before_fork", handler: SignalHandler): unknown;
@@ -143,7 +150,23 @@ export interface PiExtensionApiLike {
 export interface ExtensionDeps {
 	readonly pipeline: PipelineDeps;
 	readonly now: () => Date;
+	/**
+	 * Drops every cached exists-scan result (S8). The wiring calls it after a
+	 * `write`/`edit`/`bash` tool result — the only events that can have changed
+	 * which paths exist — and never for read-only tools. Production passes the
+	 * `invalidate` of the cache wrapping `pipeline.scan`; a deployment with an
+	 * uncached scanner passes a no-op.
+	 */
+	readonly invalidateScan: () => void;
 }
+
+/**
+ * Tools whose RESULT can change the project's matching path set. `bash` counts
+ * because an arbitrary command can create, move, or delete files; `read`,
+ * `grep`, `find`, and `ls` cannot, and an unknown/custom tool is not assumed to
+ * have mutated the disk (conservative invalidation would defeat the cache).
+ */
+const INVALIDATING_TOOLS: ReadonlySet<string> = new Set(["write", "edit", "bash"]);
 
 /**
  * Builds the extension registrar: closures hold the session state, the last
@@ -156,6 +179,9 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 	let lastErrors: readonly RuleError[] = [];
 	let lastDiscoveredRules: readonly Rule[] = [];
 	// Discovery seam wrapper: keep the parse errors of the last cycle for /rules.
+	// `pipeline.scan` is used exactly as injected: the exists-scan cache is built
+	// at the composition root, next to the `invalidateScan` effect it hands over,
+	// so the cache has ONE owner and cannot be invalidated on a copy of itself.
 	const pipeline: PipelineDeps = {
 		...deps.pipeline,
 		discover: async (opts) => {
@@ -204,6 +230,21 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 		};
 		api.on("session_start", rebuildTouchedPaths);
 		api.on("session_tree", rebuildTouchedPaths);
+
+		// Exists-scan cache (S8): the scan memo only knows about the filesystem as
+		// of its last run, so a tool result that could have changed the filesystem
+		// drops every entry; a changed pattern set misses by key on its own. This
+		// handler is wiring-owned and total, and maps to NO state event: a tool
+		// result is a completion signal, never a touch batch. Pre-execution
+		// `tool_execution_start` deliberately does not invalidate — the write has
+		// not happened yet, and a scan run between the two events would cache a
+		// pre-mutation result.
+		const invalidateScanCache = (event: PiEventShape, _ctx: ExtensionContextLike): void => {
+			if (event.type === "tool_result" && INVALIDATING_TOOLS.has(event.toolName)) {
+				deps.invalidateScan();
+			}
+		};
+		api.on("tool_result", invalidateScanCache);
 
 		api.on("before_agent_start", async (event, ctx) => {
 			// One git ref query per turn: total by contract (shell/git-branch.ts),
@@ -289,10 +330,13 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 	};
 };
 
-/** The real extension factory: production discovery, scanner, budget, clock. */
+/** The real extension factory: production discovery, exists-scan cache, budget, clock. */
 export default function piRulesMd(pi: ExtensionAPI): void {
 	const discoveryDeps: DiscoveryDeps = nodeDiscoveryDeps();
 	const cache: Map<NormalizedPath, DiscoveryCacheEntry> = new Map();
+	// Exists-scan cache (S8): the composition root owns the scanner, so it owns
+	// the memo around it and hands the wiring the matching `invalidate` effect.
+	const scanCache = createCachedScanner(tinyglobbyScanner);
 	const deps: ExtensionDeps = {
 		pipeline: {
 			discover: async (opts) => {
@@ -304,10 +348,11 @@ export default function piRulesMd(pi: ExtensionAPI): void {
 				});
 				return { rules: result.rules, errors: result.errors };
 			},
-			scan: tinyglobbyScanner,
+			scan: scanCache.scanner,
 			budget: resolveBudget(process.env.PI_RULES_MAX_TOKENS, DEFAULT_BUDGET_TOKENS),
 		},
 		now: () => new Date(),
+		invalidateScan: scanCache.invalidate,
 	};
 	createRulesExtension(deps)(pi);
 }

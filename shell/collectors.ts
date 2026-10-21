@@ -17,6 +17,10 @@
  * - `ToolExecutionStartEvent` → `tool_execution_start` (carries
  *   `toolCallId`, `toolName`, and pre-execution `args`) — exact SDK declaration
  *   is in `dist/core/extensions/types.d.ts:853-860`.
+ * - `ToolResultEvent` → `tool_result` (`ToolResultEventBase` at
+ *   `dist/core/extensions/types.d.ts:985-1005`, union at `:1037`; the wiring
+ *   subscribes at `:1225`). The mirror carries only the discriminant plus
+ *   `toolCallId`/`toolName` and an optional untyped `input`.
  *
  * NO runtime import of pi or any other package — the union is structural so
  * the collector can be tested against typed fakes and survives pi upgrades
@@ -29,6 +33,10 @@
  *   the session branch, which a pure event mapper cannot see. The index wiring
  *   owns that fold (`touched_paths_rebuilt`), so these kinds stay branch-free
  *   here instead of being silently mapped to a wrong reset.
+ * - `tool_result` → `[]`: a completed tool call is a filesystem signal, not
+ *   session state. The index wiring invalidates the exists-scan cache for
+ *   `write`/`edit`/`bash` results (S8) and folds nothing; a result's `input`
+ *   path is never treated as a touched path (pre-execution capture owns that).
  * - pre-execution read/edit/write/grep/find events use their built-in `args.path`
  *   to produce one `paths_touched`; bash and unknown tools produce no path event.
  *
@@ -72,6 +80,16 @@ export type PiEventShape =
 			readonly toolName: string;
 			/** Pi SDK types.d.ts:853-860 declares args as any; widened to unknown. */
 			readonly args: unknown;
+	  }
+	| {
+			readonly type: "tool_result";
+			readonly toolCallId: string;
+			readonly toolName: string;
+			/**
+			 * Present in the SDK (`ToolResultEventBase.input`); never consumed here —
+			 * a completed tool call contributes no path and no state event.
+			 */
+			readonly input?: unknown;
 	  };
 
 /** Relativizes a raw path against `cwd`: strip a `cwd + "/"` prefix, else keep. */
@@ -120,6 +138,9 @@ export const piEventToStateEvents = (
 				const raw = extractPathArg(event.toolName, event.args);
 				return raw === undefined ? [] : [{ type: "paths_touched", paths: [toStatePath(raw, opts.cwd)] }];
 			}
+			case "tool_result":
+				// Cache invalidation is wiring-owned (see header); no state event.
+				return [];
 			default:
 				// Foreign runtime shape: no events, never an error.
 				return [];

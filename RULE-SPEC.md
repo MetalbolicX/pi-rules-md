@@ -94,7 +94,7 @@ positive pattern, then excluded if it matches any negation.
   matching the globs this session. Paths are captured from `tool_execution_start`
   events; first occurrence wins, order preserved.
 - `exists` — active when any path matching the globs exists on disk
-  (checked via the scan seam each evaluation).
+  (checked through the [exists-scan cache](#exists-scan-cache)).
 - `both` — touched **OR** exists (the default).
 - Condition keys (`tools`, `branch`, `model`) are AND-ed on top of the
   activation mode; absent means "any".
@@ -173,6 +173,35 @@ or fork starts unmuted, and a resumed session does not restore earlier mutes.
 If the branch cannot be read at all, the rebuild is a no-op — the session keeps
 the paths it already folded instead of assuming the branch is empty.
 
+### Exists-scan cache
+
+The project scan behind `exists` matching is cached per
+`(working directory, pattern set)`. A repeated evaluation with the same working
+directory and the same deduplicated first-seen-order glob set reuses the
+previous scan instead of walking the project again. The stored value is a
+frozen snapshot of what the scanner returned, and a scan that fails propagates
+its error unchanged and caches nothing — so matching sees exactly what an
+uncached scan would have produced (pinned by a differential test).
+
+The cache is invalidated by:
+
+- a completed `write`, `edit`, or `bash` tool result — the only tool results
+  that can have changed which paths exist. `read`, `grep`, `find`, `ls`, and
+  unknown tools keep the cache, and a pre-execution `tool_execution_start`
+  never invalidates, because the mutation has not happened yet;
+- a pattern-set change — new, removed, or reordered globs, or a different
+  working directory — which simply misses by key.
+
+Invalidation and caching are not session state: no result of either is folded
+into the reducer, and nothing about a tool result is treated as a touched path.
+The accepted tradeoff is staleness for changes nothing announced: a file
+created or removed by an external process stays invisible until an invalidating
+tool result or a pattern-set change arrives.
+
+`.gitignore` handling is untouched (D1). The cache stores only what the scanner
+returned, so which files ignore rules hide is still decided solely by the
+scanner; the cache never reinterprets, extends, or rewrites ignore lists.
+
 ## 6. Selection, budget, rendering
 
 - Every discovered rule receives a monotonic `index` in discovery order:
@@ -217,6 +246,11 @@ the paths it already folded instead of assuming the branch is empty.
   `used` sums the estimated tokens of the **pinned active bodies only** —
   and, while a section is injected, `section: ~<estimatedTokens> tokens`
   covering the whole rendered section including the on-demand index.
+- The `exists` scan behind matching is cached per
+  `(working directory, pattern set)` and invalidated by `write`/`edit`/`bash`
+  tool results and by pattern-set changes; it changes scan frequency only, so
+  selection and rendering are unaffected and `.gitignore` semantics are
+  unchanged (see [Exists-scan cache](#exists-scan-cache)).
 - In UI modes (`ctx.hasUI`: TUI/RPC), the extension maintains the status-bar
   key `pi-rules-md` as `rules: <pinned-active> · ~<estimatedTokens> tok` after
   each evaluation and clears it (undefined) when nothing is active.

@@ -14,6 +14,9 @@ const CWD = "/home/u/proj";
 const start = (toolName: string, args: unknown): PiEventShape =>
 	({ type: "tool_execution_start", toolCallId: "call-1", toolName, args }) as PiEventShape;
 
+/** Post-execution tool result fixture (pi 1.3.0 `ToolResultEventBase`). */
+const result = (toolName: string, input: unknown = {}): PiEventShape => ({ type: "tool_result", toolCallId: "call-1", toolName, input });
+
 /** Recursively freezes an object/array graph in place so mutations become detectable. */
 const deepFreeze = <T>(value: T): T => {
 	if (Array.isArray(value)) {
@@ -83,9 +86,27 @@ describe("piEventToStateEvents — tool_execution_start path extraction", () => 
 		}
 	});
 
-	it("does not capture legacy tool_result paths after switching to pre-execution events", () => {
-		const legacy = { type: "tool_result", toolName: "read", input: { path: `${CWD}/src/late.ts` } } as unknown as PiEventShape;
-		expect(piEventToStateEvents(legacy, { cwd: CWD })).toEqual([]);
+	it("never folds a completed tool result's input path into touched paths", () => {
+		// Paths come from pre-execution `tool_execution_start` only; a `tool_result`
+		// is a completion signal (S8 uses it to invalidate the exists-scan cache).
+		expect(piEventToStateEvents(result("read", { path: `${CWD}/src/late.ts` }), { cwd: CWD })).toEqual([]);
+	});
+});
+
+describe("piEventToStateEvents — tool_result (exists-scan invalidation signal)", () => {
+	it("maps completed tool results to no state events, for mutating and read-only tools alike", () => {
+		// The cache invalidation is wiring-owned (like the branch rebuild): a pure
+		// event mapper folds no session state from a tool result.
+		for (const toolName of ["write", "edit", "bash", "read", "grep", "find", "custom"]) {
+			expect(piEventToStateEvents(result(toolName), { cwd: CWD })).toEqual([]);
+		}
+	});
+
+	it("ignores malformed and unknown tool_result shapes without throwing", () => {
+		for (const event of [null, undefined, 7, { type: "tool_result" }, { type: "tool_result", toolName: 42 }]) {
+			expect(() => piEventToStateEvents(event as unknown as PiEventShape, { cwd: CWD })).not.toThrow();
+			expect(piEventToStateEvents(event as unknown as PiEventShape, { cwd: CWD })).toEqual([]);
+		}
 	});
 });
 
