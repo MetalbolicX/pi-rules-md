@@ -1,31 +1,41 @@
 /**
- * Rule-base rebasing (imperative shell seam, S10 walk-up half).
+ * Rule-base rebasing (imperative shell seam, S10 monorepo discovery).
  *
  * Monorepo discovery finds project rules in every `.pi/rules` between cwd and
- * the enclosing git root. A rule's globs are authored relative to the directory
- * that owns its `.pi/` folder — its **rule base** — so a rule found at
- * `/repo/.pi/rules` means `/repo/src/**`, while the evaluation path pools are
- * expressed differently:
+ * the enclosing git root, and in nested `.pi/rules` dirs below cwd. A rule's
+ * globs are authored relative to the directory that owns its `.pi/` folder —
+ * its **rule base** — so a rule found at `/repo/.pi/rules` means
+ * `/repo/src/**`, while the evaluation path pools are expressed differently:
  *
  * - `shell/collectors.ts` relativizes a touched path against cwd and keeps a
  *   path OUTSIDE cwd absolute (`/repo/src/x.ts`).
  * - The exists scan runs relative to cwd, so its results are cwd-relative.
  *
- * Neither scale alone can answer "does this ancestor rule match?" — and the
- * matching core (`src/match.ts`, `src/engine.ts`) takes ONE shared context per
- * pass, so the honest place to reconcile the scales is here, by re-expressing
- * the rule's authored globs onto both scales before evaluation:
+ * Neither scale alone can answer "does this rule match?" — and the matching
+ * core (`src/match.ts`, `src/engine.ts`) takes ONE shared context per pass, so
+ * the honest place to reconcile the scales is here, by re-expressing the rule's
+ * authored globs onto both scales before evaluation. The rebase runs in the
+ * direction the rule base sits relative to cwd:
  *
- * 1. an ABSOLUTE form anchored at the rule base (`/repo/src/**\/*.ts`), which
- *    matches the absolute touched paths of files outside cwd;
- * 2. CWD-RELATIVE forms for paths INSIDE cwd, obtained by consuming the
- *    base→cwd segment prefix from the pattern (`packages/a/src/**` →
- *    `src/**`), including the `**` backtracking that lets a root rule such as
- *    `**\/*.ts` keep matching inner files.
+ * - **Ancestor base (walk-up half)** — `rebaseGlobs`:
+ *   1. an ABSOLUTE form anchored at the rule base (`/repo/src/**\/*.ts`), which
+ *      matches the absolute touched paths of files outside cwd;
+ *   2. CWD-RELATIVE forms for paths INSIDE cwd, obtained by consuming the
+ *      base→cwd segment prefix from the pattern (`packages/a/src/**` →
+ *      `src/**`), including the `**` backtracking that lets a root rule such as
+ *      `**\/*.ts` keep matching inner files.
+ * - **Nested base (nested half)** — `rebaseNestedGlobs`: the base is BELOW cwd,
+ *   so nothing is consumed; the base→cwd prefix is PREPENDED instead, giving
+ *   the cwd-relative form (`packages/b/src/**`) for touched paths inside cwd,
+ *   and the absolute form (`/repo/packages/b/src/**`) the exists scan runs at
+ *   the nested base. Prepending is what pins a nested rule to its own subtree:
+ *   a leading `**` becomes `packages/b/**` instead of widening to all of cwd.
  *
- * Cwd rules are untouched, and are untouched *by identity*: `rebaseGlobs`
- * returns the very array it was given whenever no rebase applies, so rules from
+ * Cwd rules are untouched, and are untouched *by identity*: both rebases return
+ * the very array they were given whenever no rebase applies, so rules from
  * `<cwd>/.pi/rules` keep today's semantics and today's bytes exactly.
+ * `rebaseRuleGlobs` is the single dispatcher discovery calls, so discovery never
+ * has to know which side of cwd a rule base sits on.
  *
  * Contract notes pinned by tests:
  * - `!`-negated patterns rebase exactly like positives (the prefix goes after
@@ -41,10 +51,11 @@
  *   are all relative — every single-directory project — delegates to exactly
  *   one cwd scan with the identical pattern array, so today's scan is
  *   byte-identical. Nothing above a pattern's static root is ever scanned; for
- *   REBASED patterns that root is inside the git root by walk-up construction,
- *   while an authored ABSOLUTE glob keeps its own root wherever the author
- *   pointed it (RULE-SPEC §1: globs are evaluated exactly as authored).
- * - Cost: an ancestor rule adds one scan per distinct static root per cycle
+ *   REBASED patterns that root is inside the git root by walk-up construction
+ *   (a nested base is inside the project by construction), while an authored
+ *   ABSOLUTE glob keeps its own root wherever the author pointed it (RULE-SPEC
+ *   §1: globs are evaluated exactly as authored).
+ * - Cost: a rebased rule adds one scan per distinct static root per cycle
  *   (the S8 cache keys by cwd + the exact pattern sequence, so the rebased
  *   patterns are part of the key and a changed rule base is a fresh key).
  */
@@ -134,18 +145,15 @@ const cwdScaleVariants = (body: string, rel: readonly string[]): readonly string
 };
 
 /**
- * Re-expresses `globs` (authored relative to the rule base) onto the two scales
- * the evaluation path pools carry. Returns the INPUT array unchanged — same
- * identity, no copy — when there is nothing to rebase, which is the exact
- * single-directory behavior: `base === cwd` (a `<cwd>/.pi/rules` rule) or a cwd
- * that is not inside the base.
+ * Rebuilds a rule's globs from per-body variants, preserving declaration order
+ * and dropping duplicate variants. Escaped bodies (empty, absolute, `..`) are
+ * kept exactly as authored, and a `!` negation keeps its marker before the
+ * rebased body so exclusions stay on the same scale as their inclusions.
+ *
+ * The identity contract lives in the CALLERS: they return the input array
+ * itself when no rebase applies, so a cwd rule never gets a copy.
  */
-export const rebaseGlobs = (globs: readonly string[], base: string, cwd: string): readonly string[] => {
-	const rel = descendantSegments(base, cwd);
-	if (rel === undefined) {
-		return globs;
-	}
-	const anchor = stripTrailingSlash(normalizedPath(base));
+const rebaseBodies = (globs: readonly string[], variantsOf: (body: string) => readonly string[]): readonly string[] => {
 	const out: string[] = [];
 	const seen = new Set<string>();
 	const push = (pattern: string): void => {
@@ -157,18 +165,65 @@ export const rebaseGlobs = (globs: readonly string[], base: string, cwd: string)
 	for (const glob of globs) {
 		const negated = glob.startsWith("!");
 		const body = negated ? glob.slice(1) : glob;
-		const parts = body.split("/");
-		if (body === "" || isAbsolutePattern(body) || parts.includes("..")) {
+		// Escaped bodies stay exactly as authored (see the contract notes above).
+		if (body === "" || isAbsolutePattern(body) || body.split("/").includes("..")) {
 			push(glob);
 			continue;
 		}
-		const variants = [`${anchor}/${body}`, ...cwdScaleVariants(body, rel)];
-		for (const variant of variants) {
+		for (const variant of variantsOf(body)) {
 			push(negated ? `!${variant}` : variant);
 		}
 	}
 	return out;
 };
+
+/**
+ * Re-expresses `globs` (authored relative to an ANCESTOR rule base) onto the two
+ * scales the evaluation path pools carry. Returns the INPUT array unchanged —
+ * same identity, no copy — when there is nothing to rebase, which is the exact
+ * single-directory behavior: `base === cwd` (a `<cwd>/.pi/rules` rule) or a cwd
+ * that is not inside the base.
+ */
+export const rebaseGlobs = (globs: readonly string[], base: string, cwd: string): readonly string[] => {
+	const rel = descendantSegments(base, cwd);
+	if (rel === undefined) {
+		return globs;
+	}
+	const anchor = stripTrailingSlash(normalizedPath(base));
+	return rebaseBodies(globs, (body) => [`${anchor}/${body}`, ...cwdScaleVariants(body, rel)]);
+};
+
+/**
+ * Re-expresses `globs` (authored relative to a NESTED rule base, i.e. one BELOW
+ * cwd) onto the same two scales, by PREPENDING the base→cwd prefix:
+ * `src/**` under base `/repo/packages/b` with cwd `/repo` becomes
+ * `packages/b/src/**` (cwd-relative, for touched paths inside cwd) and
+ * `/repo/packages/b/src/**` (absolute, for the exists scan at the nested base).
+ *
+ * Returns the INPUT array unchanged — same identity, no copy — when the base is
+ * not strictly below cwd (a cwd rule, an ancestor rule, or an unrelated path),
+ * which keeps the walk-up half and today's single-directory behavior untouched.
+ */
+export const rebaseNestedGlobs = (globs: readonly string[], base: string, cwd: string): readonly string[] => {
+	const rel = descendantSegments(cwd, base);
+	if (rel === undefined) {
+		return globs;
+	}
+	const anchor = stripTrailingSlash(normalizedPath(base));
+	const prefix = rel.join("/");
+	// Absolute first, then cwd-relative: the same order the walk-up rebase uses.
+	return rebaseBodies(globs, (body) => [`${anchor}/${body}`, `${prefix}/${body}`]);
+};
+
+/**
+ * The single rule-base rebase entry point used by discovery: dispatched on which
+ * side of cwd the rule base sits. A base strictly below cwd is a nested base
+ * (`rebaseNestedGlobs`); everything else — cwd itself, an ancestor, or an
+ * unrelated path — goes through the walk-up rebase, which owns the identity
+ * contract for cwd rules.
+ */
+export const rebaseRuleGlobs = (globs: readonly string[], base: string, cwd: string): readonly string[] =>
+	descendantSegments(cwd, base) === undefined ? rebaseGlobs(globs, base, cwd) : rebaseNestedGlobs(globs, base, cwd);
 
 /** One scan pattern's static root and the glob remainder to run there. */
 export interface ScanPatternRoot {

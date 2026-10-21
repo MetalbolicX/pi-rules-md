@@ -32,13 +32,21 @@
  * - Monorepo walk-up (S10): the project source is the ordered `.pi/rules` list
  *   from `<cwd>/.pi/rules` up to the git root, one pass segment per directory,
  *   in that order — so cwd ordering/ids/bytes are exactly today's and ancestor
- *   rules append after them. All project directories share ONE id namespace,
- *   every project directory precedes global, and each rule's globs are relative
- *   to the directory owning its `.pi/` folder (rebased in shell/match.ts). The
- *   list is bounded by the caller; discovery never walks further, so a
- *   `.pi/rules` above the git root is never read.
- * - Trust gate: when the project is untrusted, NO project directory (cwd's or
- *   any ancestor's) is listed, stat-ed, or read.
+ *   rules append after them. The list is bounded by the caller; discovery never
+ *   walks further, so a `.pi/rules` above the git root is never read.
+ * - Nested descendants (S10): discovery ENUMERATES `.pi/rules` dirs below cwd
+ *   through the injected `listNestedRuleDirs` seam and appends them to the same
+ *   pass — after cwd and the ancestors, before global, ordered shallow-first
+ *   then lexicographically (see `nestedProjectRuleDirs`). The enumeration is
+ *   bounded by `MAX_NESTED_RULES_DIR_DEPTH`, never accepts a dir outside cwd,
+ *   and never accepts one under `.git` or `node_modules` — checked again in the
+ *   pure filter, so a wrong adapter cannot widen the read set. Their globs are
+ *   rebased the other way round (prefix PREPENDED, shell/match.ts).
+ * - All project directories (cwd, ancestors, nested) share ONE id namespace,
+ *   and every project directory precedes global; each rule's globs are relative
+ *   to the directory owning its `.pi/` folder (rebased in shell/match.ts).
+ * - Trust gate: when the project is untrusted, NO project directory (cwd's, an
+ *   ancestor's, or a nested one) is listed, enumerated, stat-ed, or read.
  * - A missing directory contributes nothing and is not an error (the
  *   production `listRuleFiles` resolves ENOENT to []); a REJECTED
  *   `listRuleFiles` is collected as one `source-unreadable` error naming the
@@ -64,7 +72,7 @@ import { parseRule } from "../src/frontmatter.ts";
 import type { GlobScanner } from "../src/match.ts";
 import { normalizedPath, ruleId } from "../src/types.ts";
 import type { NormalizedPath, Rule, RuleError, RuleSource } from "../src/types.ts";
-import { rebaseGlobs } from "./match.ts";
+import { rebaseRuleGlobs } from "./match.ts";
 
 /** Injected filesystem surface for discovery. */
 export interface DiscoveryDeps {
@@ -74,6 +82,14 @@ export interface DiscoveryDeps {
 	readonly stat: (path: string) => Promise<{ readonly mtimeMs: number }>;
 	/** Reads one file as UTF-8 text. */
 	readonly readFile: (path: string) => Promise<string>;
+	/**
+	 * Enumerates the `.pi/rules` directories BELOW `cwd` (S10 nested half), as
+	 * absolute normalized paths. Called only for a trusted project — never for an
+	 * untrusted one — and re-validated by `nestedProjectRuleDirs` (depth bound,
+	 * containment, `.git`/`node_modules`), so this adapter can only ever narrow
+	 * the read set, never widen it. A missing `cwd` resolves to `[]`.
+	 */
+	readonly listNestedRuleDirs: (cwd: string) => Promise<readonly string[]>;
 }
 
 /** Directories discovery reads from, plus the project trust gate. */
@@ -125,6 +141,18 @@ export interface DiscoveryResult {
 
 const RULE_SUFFIX = ".md";
 const MAX_RULES_SCAN_DEPTH = 10;
+/**
+ * Deepest nested rule base discovery accepts (S10 nested half), counted as the
+ * number of directory segments between cwd and the directory owning the `.pi/`
+ * folder: `packages/b/.pi/rules` is depth 2 (precedent: `MAX_RULES_SCAN_DEPTH`).
+ * Bounds both the enumeration glob (`deep`, in the production adapter) and the
+ * pure filter, so neither a wrong adapter nor a deep tree can widen the scan.
+ */
+export const MAX_NESTED_RULES_DIR_DEPTH = 6;
+/** Suffix every enumerated entry must carry: the `.pi/rules` dir itself. */
+const NESTED_RULES_SUFFIX = "/.pi/rules";
+/** Directory names never walked into while looking for rule dirs. */
+const IGNORED_DIR_SEGMENTS: ReadonlySet<string> = new Set([".git", "node_modules"]);
 
 /** True for files this pipeline treats as rule files. */
 const isRuleFile = (path: string): boolean => path.endsWith(RULE_SUFFIX);
@@ -194,6 +222,85 @@ export const projectRuleDirs = (cwd: string, gitRoot: string | undefined): reado
 	}
 };
 
+/** Non-empty path segments; a leading `/` or `C:` survives as a segment. */
+const segmentsOf = (value: string): readonly string[] => normalizedPath(value).split("/").filter((segment) => segment !== "");
+
+/**
+ * Directory segments of `path` relative to `from`, or `undefined` when `path` is
+ * not STRICTLY inside `from` (equal paths included). Separator-normalized;
+ * `C:` survives as a segment, which is what git reports on Windows.
+ */
+const segmentsInside = (from: string, path: string): readonly string[] | undefined => {
+	const outer = segmentsOf(from);
+	const inner = segmentsOf(path);
+	if (inner.length <= outer.length) {
+		return undefined;
+	}
+	for (const [index, segment] of outer.entries()) {
+		if (inner[index] !== segment) {
+			return undefined;
+		}
+	}
+	return inner.slice(outer.length);
+};
+
+/** Nested-dir order: shallow-first, then lexicographic by base path. */
+const byDepthThenPath = (
+	a: { readonly entry: ProjectRuleDir; readonly depth: number },
+	b: { readonly entry: ProjectRuleDir; readonly depth: number },
+): number => {
+	if (a.depth !== b.depth) {
+		return a.depth - b.depth;
+	}
+	return a.entry.base < b.entry.base ? -1 : a.entry.base > b.entry.base ? 1 : 0;
+};
+
+/**
+ * The nested project rules directories discovery appends to the pass (S10
+ * nested half), derived from the adapter's raw enumeration.
+ *
+ * Deterministic by contract:
+ * - only entries that ARE a `.pi/rules` directory count (`<base>/.pi/rules`);
+ * - the rule base (`base`) must be STRICTLY below cwd, so a nested dir can never
+ *   be cwd's own `.pi/rules` (that dir is already first in the walk-up list) nor
+ *   anything above or beside cwd — this is the no-escape pin;
+ * - `base` must be at most `MAX_NESTED_RULES_DIR_DEPTH` segments below cwd;
+ * - no segment of the relative path may be `.git` or `node_modules` — an ignored
+ *   tree is never a rule base, whatever the adapter reports;
+ * - duplicates collapse to the first occurrence, and the result is ordered
+ *   SHALLOW-FIRST and then lexicographically by base path. Nearest-first matches
+ *   the walk-up's spirit (cwd, then outward), so a nearer nested `.pi/rules` wins
+ *   the bare id stem on a collision, and the order never depends on adapter
+ *   output order.
+ *
+ * Pure and total: an unparsable or hostile entry is simply dropped.
+ */
+export const nestedProjectRuleDirs = (cwd: string, listed: readonly string[]): readonly ProjectRuleDir[] => {
+	const found: Array<{ readonly entry: ProjectRuleDir; readonly depth: number }> = [];
+	const seen = new Set<string>();
+	for (const listedDir of listed) {
+		const dir = normalizedPath(listedDir).replace(/\/+$/, "");
+		if (!dir.endsWith(NESTED_RULES_SUFFIX)) {
+			continue;
+		}
+		const rawBase = dir.slice(0, -NESTED_RULES_SUFFIX.length);
+		const base = normalizedPath(rawBase === "" ? "/" : rawBase);
+		const relative = segmentsInside(cwd, base);
+		if (relative === undefined || relative.length > MAX_NESTED_RULES_DIR_DEPTH) {
+			continue;
+		}
+		if (relative.some((segment) => IGNORED_DIR_SEGMENTS.has(segment))) {
+			continue;
+		}
+		if (seen.has(base)) {
+			continue;
+		}
+		seen.add(base);
+		found.push({ entry: { dir: normalizedPath(dir), base }, depth: relative.length });
+	}
+	return found.sort(byDepthThenPath).map((item) => item.entry);
+};
+
 /**
  * Resolves unique rule ids across the whole merged discovery pass: the first
  * file with a given stem — in pass order (project source first, then global;
@@ -233,21 +340,22 @@ const isEnoent = (cause: unknown): boolean =>
  * (S10). Two adjustments, and ONLY for rules whose base is not cwd:
  *
  * - `globs` are rebased from the rule base onto the cwd/absolute scales
- *   (shell/match.ts) so an ancestor rule matches the paths the evaluation pools
- *   actually carry. A cwd rule (`base === cwd`) is NOT touched — `rebaseGlobs`
- *   returns the identical array, and the whole rule object is returned as-is.
+ *   (shell/match.ts) so the rule matches the paths the evaluation pools actually
+ *   carry — consuming the prefix for an ANCESTOR base, prepending it for a
+ *   NESTED one. A cwd rule (`base === cwd`) is NOT touched — the rebase returns
+ *   the identical array, and the whole rule object is returned as-is.
  * - `relativePath` is derived from the rule's OWN rules directory. The pipeline
  *   can only derive it for `<cwd>/.pi/rules` (it knows just cwd's rules root),
- *   so an ancestor on-demand rule would otherwise be indexed with no fetchable
- *   reference and `read_rule` would answer "Unknown rule". Cwd rules keep
- *   today's shape: absent here, derived by the pipeline exactly as before, so
- *   their bytes do not move.
+ *   so an ancestor or nested on-demand rule would otherwise be indexed with no
+ *   fetchable reference and `read_rule` would answer "Unknown rule". Cwd rules
+ *   keep today's shape: absent here, derived by the pipeline exactly as before,
+ *   so their bytes do not move.
  */
 const finalizeProjectRule = (rule: Rule, entry: ProjectRuleDir, cwd: string): Rule => {
 	if (normalizedPath(entry.base) === normalizedPath(cwd) && rule.relativePath === undefined) {
 		return rule;
 	}
-	const globs = rule.globs === undefined ? undefined : rebaseGlobs(rule.globs, entry.base, cwd);
+	const globs = rule.globs === undefined ? undefined : rebaseRuleGlobs(rule.globs, entry.base, cwd);
 	const prefix = `${entry.dir}/`;
 	const derived = rule.relativePath ?? (rule.path.startsWith(prefix) ? normalizedPath(rule.path.slice(prefix.length)) : undefined);
 	if (globs === rule.globs && derived === rule.relativePath) {
@@ -353,32 +461,65 @@ const loadRule = async (
 };
 
 /**
+ * Runs the nested-directory enumeration, converting a rejection into one
+ * `source-unreadable` error naming cwd (S10 nested half). Total: a broken
+ * enumeration loses the nested sources for that pass but never the walk-up
+ * sources, the global source, or the session — and it is honest, because a
+ * failed enumeration is not evidence that no nested rules exist.
+ */
+const enumerateNested = async (
+	deps: DiscoveryDeps,
+	cwd: string,
+	errors: RuleError[],
+): Promise<readonly string[]> => {
+	try {
+		return await deps.listNestedRuleDirs(cwd);
+	} catch (cause) {
+		errors.push({
+			code: "source-unreadable",
+			message: `failed to enumerate nested rules sources: ${cause instanceof Error ? cause.message : String(cause)}`,
+			file: normalizedPath(cwd),
+		});
+		return [];
+	}
+};
+
+/**
  * Discovers rules from the project (first, when trusted) and global
  * directories. Pure orchestration over the injected deps: the input cache
  * is never mutated, and the fresh next cache covers exactly the files still
  * listed. Callers start with an empty cache (`new Map()`).
  *
- * Monorepo walk-up (S10): every project directory in `opts.projectDirs` is one
- * pass segment, in the caller's order (cwd first, then ancestors up to the git
+ * Monorepo (S10): every project directory in `opts.projectDirs` is one pass
+ * segment, in the caller's order (cwd first, then ancestors up to the git
  * root). All of them contribute `source: "project"`, all of them share ONE id
  * namespace (so the stem+suffix contract holds across directories), and all of
- * them come before global. Ancestor rules have their globs rebased onto the
- * cwd scale (shell/match.ts) and get the rules-dir-relative `relativePath` the
- * pipeline can only derive for cwd rules; a rule whose base IS cwd is returned
- * untouched, so today's single-directory output is byte-identical.
+ * them come before global. Rebased rules (ancestor or nested) have their globs
+ * re-expressed onto the cwd/absolute scales (shell/match.ts) and get the
+ * rules-dir-relative `relativePath` the pipeline can only derive for cwd rules;
+ * a rule whose base IS cwd is returned untouched, so today's single-directory
+ * output is byte-identical.
+ *
+ * Nested half: when the project is trusted, discovery ENUMERATES `.pi/rules`
+ * dirs below cwd (`deps.listNestedRuleDirs`) and appends the filtered, sorted
+ * result after the walk-up list and before global. An untrusted project is
+ * never enumerated at all, and a project with no nested rules pays only the
+ * enumeration glob — the pass itself is unchanged.
  */
 export const discover = async (
 	deps: DiscoveryDeps,
 	cache: DiscoveryCache,
 	opts: DiscoveryOptions,
 ): Promise<DiscoveryResult> => {
-	// Project first so the selection pipeline's content-tie dedupe prefers
-	// project rules; the trust gate drops every project source at once.
-	const projectDirs: readonly ProjectRuleDir[] = opts.isProjectTrusted ? opts.projectDirs : [];
-
 	const rules: Rule[] = [];
 	const errors: RuleError[] = [];
 	const nextCache = new Map<NormalizedPath, DiscoveryCacheEntry>();
+	// Project first so the selection pipeline's content-tie dedupe prefers
+	// project rules; the trust gate drops every project source at once AND skips
+	// the nested enumeration, so an untrusted tree is never even globbed.
+	const projectDirs: readonly ProjectRuleDir[] = opts.isProjectTrusted
+		? [...opts.projectDirs, ...nestedProjectRuleDirs(opts.cwd, await enumerateNested(deps, opts.cwd, errors))]
+		: [];
 	// Shared across the merged pass so ids stay unique project-wide + global-wide.
 	const usedIds = new Set<string>();
 	const loadSource = async (dir: string, source: RuleSource, entry: ProjectRuleDir | undefined): Promise<void> => {
@@ -415,10 +556,23 @@ export const discover = async (
 };
 
 /**
- * Production deps: node:fs/promises stat/read plus a tinyglobby listing
- * (recursive md glob, relative to the directory) that resolves a missing directory
- * (ENOENT) to an empty result — discovery then contributes nothing for that
- * source instead of failing.
+ * Production deps: node:fs/promises stat/read, a tinyglobby listing (recursive
+ * md glob, relative to the directory) that resolves a missing directory (ENOENT)
+ * to an empty result — discovery then contributes nothing for that source
+ * instead of failing — and the nested-directory enumeration.
+ *
+ * The enumeration is one bounded glob for `**\/.pi\/rules` below cwd:
+ * - `dot: true` so `.pi` is visible at all; `onlyDirectories` so only rule
+ *   directories come back (with a trailing separator, stripped here);
+ * - `deep: MAX_NESTED_RULES_DIR_DEPTH + 1`: a rule base `d` segments below cwd
+ *   sits at depth `d + 2` (its `.pi` and `rules` dirs) and tinyglobby admits an
+ *   entry when `deep` is at least one less than its depth, so this crawls
+ *   exactly to the documented bound and one level deeper is never enumerated;
+ * - `.git/**` and `node_modules/**` ignored at EVERY depth (both the bare and
+ *   the `**\/` form, matching `tinyglobbyScanner`'s pinned ignore policy);
+ * - `followSymbolicLinks: false`, so a symlinked subtree is never crawled: a
+ *   link pointing outside the project must not become a rule source;
+ * - a missing cwd (ENOENT) resolves to `[]`, like a missing rules dir.
  */
 export const nodeDiscoveryDeps = (): DiscoveryDeps => ({
 	listRuleFiles: async (dir) => {
@@ -454,6 +608,29 @@ export const nodeDiscoveryDeps = (): DiscoveryDeps => ({
 			}
 			throw cause;
 		}
+	},
+	listNestedRuleDirs: async (cwd) => {
+		let found: readonly string[];
+		try {
+			found = await glob(["**/.pi/rules"], {
+				cwd,
+				dot: true,
+				onlyDirectories: true,
+				onlyFiles: false,
+				deep: MAX_NESTED_RULES_DIR_DEPTH + 1,
+				followSymbolicLinks: false,
+				ignore: [".git/**", "**/.git/**", "node_modules/**", "**/node_modules/**"],
+			});
+		} catch (cause) {
+			if (isEnoent(cause)) {
+				return [];
+			}
+			throw cause;
+		}
+		// Results are relative to cwd with a trailing separator; discovery filters
+		// them again (`nestedProjectRuleDirs`), so nothing here can widen the read set.
+		const root = normalizedPath(cwd).replace(/\/+$/, "");
+		return found.map((name) => normalizedPath(`${root}/${name.replace(/\/+$/, "")}`));
 	},
 	stat: async (path) => {
 		const stats = await stat(path);

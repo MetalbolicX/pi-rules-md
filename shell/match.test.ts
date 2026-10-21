@@ -24,10 +24,12 @@ import { describe, expect, it } from "vitest";
 import { globMatcher } from "../src/conditions/predicates.ts";
 import { normalizedPath } from "../src/types.ts";
 import type { GlobScanner } from "../src/match.ts";
-import { createScopedScanner, rebaseGlobs, scanPatternRoot } from "./match.ts";
+import { createScopedScanner, rebaseGlobs, rebaseNestedGlobs, rebaseRuleGlobs, scanPatternRoot } from "./match.ts";
 
 const REPO = "/repo";
 const PKG = "/repo/packages/a";
+/** A rule base BELOW cwd: the nested-descendant direction of S10. */
+const NESTED = "/repo/packages/b";
 
 /** Matches one path against a glob list exactly like the engine's path slice. */
 const matches = (globs: readonly string[], path: string): boolean => globMatcher(globs)(normalizedPath(path));
@@ -117,6 +119,85 @@ describe("rebaseGlobs — negation and structural safety", () => {
 	it("produces no duplicate variants", () => {
 		const globs = rebaseGlobs(["**", "**/*.ts", "**/*.ts"], REPO, PKG);
 		expect(new Set(globs).size).toBe(globs.length);
+	});
+});
+
+describe("rebaseNestedGlobs — nested rule bases match inside their own subtree", () => {
+	it("rebases authored globs onto the cwd subtree AND the absolute base", () => {
+		const globs = rebaseNestedGlobs(["src/**"], NESTED, REPO);
+		expect(globs).toContain("packages/b/src/**");
+		expect(globs).toContain("/repo/packages/b/src/**");
+		// Both scales the pools can carry: cwd-relative inside cwd, absolute outside.
+		expect(matches(globs, "packages/b/src/x.ts")).toBe(true);
+		expect(matches(globs, "packages/b/src/deep/x.ts")).toBe(true);
+		expect(matches(globs, "/repo/packages/b/src/x.ts")).toBe(true);
+	});
+
+	it("never claims a same-named path outside the nested base", () => {
+		const globs = rebaseNestedGlobs(["src/**"], NESTED, REPO);
+		// cwd-level src/ is a DIFFERENT file than the nested base's src/.
+		expect(matches(globs, "src/x.ts")).toBe(false);
+		expect(matches(globs, "/repo/src/x.ts")).toBe(false);
+		expect(matches(globs, "packages/a/src/x.ts")).toBe(false);
+	});
+
+	it("keeps a leading `**` inside the subtree instead of widening to all of cwd", () => {
+		const globs = rebaseNestedGlobs(["**/*.ts"], NESTED, REPO);
+		expect(matches(globs, "packages/b/x.ts")).toBe(true);
+		expect(matches(globs, "packages/b/deep/x.ts")).toBe(true);
+		expect(matches(globs, "packages/a/x.ts")).toBe(false);
+		expect(matches(globs, "x.ts")).toBe(false);
+	});
+
+	it("rebases negations identically, so exclusions stay inside the subtree", () => {
+		const globs = rebaseNestedGlobs(["src/**", "!src/**/*.test.ts"], NESTED, REPO);
+		expect(matches(globs, "packages/b/src/x.ts")).toBe(true);
+		expect(matches(globs, "packages/b/src/x.test.ts")).toBe(false);
+		expect(matches(globs, "/repo/packages/b/src/x.test.ts")).toBe(false);
+		// The exclusion is anchored like its inclusion: it cannot reach a
+		// same-named file anywhere outside the nested base.
+		const exclusions = globs.filter((glob) => glob.startsWith("!")).map((glob) => glob.slice(1));
+		expect(matches(exclusions, "packages/b/src/x.test.ts")).toBe(true);
+		expect(matches(exclusions, "packages/a/src/x.test.ts")).toBe(false);
+		expect(matches(exclusions, "src/x.test.ts")).toBe(false);
+	});
+
+	it("returns the input array unchanged when the base is not strictly below cwd", () => {
+		const authored = ["src/**"];
+		expect(rebaseNestedGlobs(authored, REPO, REPO)).toBe(authored);
+		// Ancestor direction belongs to rebaseGlobs, not here.
+		expect(rebaseNestedGlobs(authored, REPO, NESTED)).toBe(authored);
+	});
+
+	it("leaves authored absolute and parent-escaping globs untouched (no invented anchor)", () => {
+		expect(rebaseNestedGlobs(["/etc/**", "../outside/**"], NESTED, REPO)).toEqual(["/etc/**", "../outside/**"]);
+	});
+
+	it("produces no duplicate variants", () => {
+		const globs = rebaseNestedGlobs(["src/**", "src/**"], NESTED, REPO);
+		expect(new Set(globs).size).toBe(globs.length);
+	});
+});
+
+describe("rebaseRuleGlobs — dispatches by the direction of the rule base", () => {
+	it("keeps the identity contract when the base IS cwd", () => {
+		const authored = ["src/**", "!src/**/*.test.ts"];
+		expect(rebaseRuleGlobs(authored, PKG, PKG)).toBe(authored);
+	});
+
+	it("rebases an ancestor base exactly like the walk-up rebase", () => {
+		expect(rebaseRuleGlobs(["src/**"], REPO, PKG)).toEqual(rebaseGlobs(["src/**"], REPO, PKG));
+		expect(rebaseRuleGlobs(["src/**"], REPO, PKG)).toContain("/repo/src/**");
+	});
+
+	it("rebases a nested base exactly like the subtree rebase", () => {
+		expect(rebaseRuleGlobs(["src/**"], NESTED, REPO)).toEqual(rebaseNestedGlobs(["src/**"], NESTED, REPO));
+		expect(rebaseRuleGlobs(["src/**"], NESTED, REPO)).toContain("packages/b/src/**");
+	});
+
+	it("leaves globs alone when cwd is not related to the base", () => {
+		const authored = ["src/**"];
+		expect(rebaseRuleGlobs(authored, "/elsewhere", REPO)).toBe(authored);
 	});
 });
 

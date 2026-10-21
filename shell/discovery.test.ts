@@ -16,7 +16,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discover, nodeDiscoveryDeps, projectRuleDirs, tinyglobbyScanner } from "./discovery.ts";
+import { discover, MAX_NESTED_RULES_DIR_DEPTH, nestedProjectRuleDirs, nodeDiscoveryDeps, projectRuleDirs, tinyglobbyScanner } from "./discovery.ts";
 import type { DiscoveryDeps, DiscoveryOptions } from "./discovery.ts";
 import { normalizedPath } from "../src/types.ts";
 
@@ -50,8 +50,8 @@ const seed = (entries: ReadonlyArray<readonly [string, FakeFile]>): Map<string, 
  * relative names (reversed to prove discover sorts), and every list/stat/
  * read call is recorded for trust-gate and cache-reuse assertions.
  */
-const fakeDeps = (files: Map<string, FakeFile>) => {
-	const callLog = { listed: [] as string[], stat: [] as string[], read: [] as string[] };
+const fakeDeps = (files: Map<string, FakeFile>, nestedDirs: readonly string[] = []) => {
+	const callLog = { listed: [] as string[], stat: [] as string[], read: [] as string[], nested: [] as string[] };
 	const deps: DiscoveryDeps = {
 		listRuleFiles: async (dir) => {
 			callLog.listed.push(dir);
@@ -62,6 +62,10 @@ const fakeDeps = (files: Map<string, FakeFile>) => {
 				}
 			}
 			return names.reverse();
+		},
+		listNestedRuleDirs: async (cwd) => {
+			callLog.nested.push(cwd);
+			return nestedDirs;
 		},
 		stat: async (path) => {
 			callLog.stat.push(path);
@@ -271,6 +275,7 @@ describe("discover — missing directories", () => {
 describe("discover — source and read failures", () => {
 	it("collects source-unreadable for a rejected listRuleFiles; the other source continues", async () => {
 		const deps: DiscoveryDeps = {
+			listNestedRuleDirs: async () => [],
 			listRuleFiles: async (dir) => {
 				if (dir === PROJECT_DIR) {
 					throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
@@ -377,6 +382,7 @@ describe("discover — mtime cache", () => {
 
 	it("reports non-ENOENT stat failures without caching and continues discovery", async () => {
 		const deps: DiscoveryDeps = {
+			listNestedRuleDirs: async () => [],
 			listRuleFiles: async (dir) => (dir === PROJECT_DIR ? ["locked.md", "a.md"] : []),
 			stat: async (path) => {
 				if (path.endsWith("locked.md")) {
@@ -402,6 +408,7 @@ describe("discover — mtime cache", () => {
 
 	it("skips files that vanish between listing and stat: no rule, no error, no cache entry", async () => {
 		const deps: DiscoveryDeps = {
+			listNestedRuleDirs: async () => [],
 			listRuleFiles: async (dir) => (dir === PROJECT_DIR ? ["a.md", "gone.md"] : []),
 			stat: async (path) => {
 				if (path.endsWith("gone.md")) {
@@ -419,6 +426,7 @@ describe("discover — mtime cache", () => {
 
 	it("skips files that vanish between stat and read: no rule, no error, no cache entry", async () => {
 		const deps: DiscoveryDeps = {
+			listNestedRuleDirs: async () => [],
 			listRuleFiles: async (dir) => (dir === PROJECT_DIR ? ["a.md", "gone.md"] : []),
 			stat: async () => ({ mtimeMs: 1 }),
 			readFile: async (path) => {
@@ -768,5 +776,274 @@ describe("discover — monorepo walk-up (S10)", () => {
 		expect(result.rules.map((rule) => rule.id)).toEqual(["root"]);
 		expect(callLog.listed).not.toContain(above);
 		expect(callLog.listed).not.toContain("/.pi/rules");
+	});
+});
+
+describe("nestedProjectRuleDirs — enumeration filtering (S10 nested half)", () => {
+	/** The `.pi/rules` dir under one base. */
+	const rulesDir = (base: string): string => `${base}/.pi/rules`;
+	/** A base exactly `MAX_NESTED_RULES_DIR_DEPTH` segments below cwd. */
+	const atBound = `/repo/${Array.from({ length: MAX_NESTED_RULES_DIR_DEPTH }, (_, index) => `d${index}`).join("/")}`;
+
+	it("accepts .pi/rules dirs strictly below cwd and rejects cwd's own dir", () => {
+		expect(nestedProjectRuleDirs("/repo", [rulesDir("/repo"), rulesDir("/repo/packages/b")])).toEqual([
+			{ dir: normalizedPath("/repo/packages/b/.pi/rules"), base: normalizedPath("/repo/packages/b") },
+		]);
+	});
+
+	it("bounds the depth at MAX_NESTED_RULES_DIR_DEPTH", () => {
+		expect(nestedProjectRuleDirs("/repo", [rulesDir(atBound), rulesDir(`${atBound}/deeper`)])).toEqual([
+			{ dir: normalizedPath(`${atBound}/.pi/rules`), base: normalizedPath(atBound) },
+		]);
+	});
+
+	it("never accepts a dir under .git or node_modules at any depth", () => {
+		expect(
+			nestedProjectRuleDirs("/repo", [
+				rulesDir("/repo/.git"),
+				rulesDir("/repo/.git/sub"),
+				rulesDir("/repo/node_modules"),
+				rulesDir("/repo/packages/b/node_modules/pkg"),
+			]),
+		).toEqual([]);
+	});
+
+	it("never accepts a dir outside cwd, in either direction", () => {
+		expect(
+			nestedProjectRuleDirs("/repo/packages/a", [
+				rulesDir("/repo/packages/b"),
+				rulesDir("/repo"),
+				rulesDir("/etc"),
+				rulesDir("/repo/packages/a/packages/b"),
+			]),
+		).toEqual([
+			{ dir: normalizedPath("/repo/packages/a/packages/b/.pi/rules"), base: normalizedPath("/repo/packages/a/packages/b") },
+		]);
+	});
+
+	it("orders shallow-first, then lexicographically, and dedupes", () => {
+		const dirs = nestedProjectRuleDirs("/repo", [
+			rulesDir("/repo/b"),
+			rulesDir("/repo/a/deep"),
+			rulesDir("/repo/a"),
+			rulesDir("/repo/a"),
+		]);
+		expect(dirs.map((entry) => entry.base)).toEqual([
+			normalizedPath("/repo/a"),
+			normalizedPath("/repo/b"),
+			normalizedPath("/repo/a/deep"),
+		]);
+	});
+
+	it("ignores entries that are not .pi/rules dirs, and normalizes separators/trailing slashes", () => {
+		expect(
+			nestedProjectRuleDirs("/repo", [
+				"/repo/packages/b/.pi",
+				"/repo/packages/b/rules",
+				"\\repo\\packages\\b\\.pi\\rules\\",
+			]),
+		).toEqual([{ dir: normalizedPath("/repo/packages/b/.pi/rules"), base: normalizedPath("/repo/packages/b") }]);
+	});
+
+	it("handles the filesystem root as cwd", () => {
+		expect(nestedProjectRuleDirs("/", [rulesDir("/repo")])).toEqual([
+			{ dir: normalizedPath("/repo/.pi/rules"), base: normalizedPath("/repo") },
+		]);
+	});
+});
+
+describe("discover — nested descendant dirs (S10 nested half)", () => {
+	const REPO = "/repo";
+	const PKG = "/repo/packages/a";
+	const PKG_DIR = `${PKG}/.pi/rules`;
+	const ROOT_DIR = `${REPO}/.pi/rules`;
+	const B_DIR = `${PKG}/packages/b/.pi/rules`;
+	const C_DIR = `${PKG}/packages/c/.pi/rules`;
+
+	/** cwd + ancestor list plus the nested dirs the fake enumerator reports. */
+	const nestedOpts = (nestedDirs: readonly string[], isProjectTrusted = true): DiscoveryOptions => ({
+		globalDir: GLOBAL_DIR,
+		projectDirs: [
+			{ dir: PKG_DIR, base: PKG },
+			{ dir: ROOT_DIR, base: REPO },
+		],
+		cwd: PKG,
+		isProjectTrusted,
+	});
+
+	it("appends nested dirs after the walk-up list and before global", async () => {
+		const { deps, callLog } = fakeDeps(
+			seed([
+				[`${PKG_DIR}/pkg.md`, file(ruleText("Pkg"))],
+				[`${ROOT_DIR}/root.md`, file(ruleText("Root"))],
+				[`${B_DIR}/b.md`, file(ruleText("B"))],
+				[`${C_DIR}/c.md`, file(ruleText("C"))],
+				[`${GLOBAL_DIR}/g.md`, file(ruleText("Global"))],
+			]),
+			// Reverse-inserted on purpose: discover must sort deterministically.
+			[C_DIR, B_DIR],
+		);
+		const result = await discover(deps, new Map(), nestedOpts([C_DIR, B_DIR]));
+		expect(callLog.listed).toEqual([PKG_DIR, ROOT_DIR, B_DIR, C_DIR, GLOBAL_DIR]);
+		expect(result.rules.map((rule) => rule.id)).toEqual(["pkg", "root", "b", "c", "g"]);
+		expect(result.rules.every((rule) => rule.source === "project" || rule.id === "g")).toBe(true);
+	});
+
+	it("keeps ONE id namespace across cwd, ancestor, nested and global dirs", async () => {
+		const { deps } = fakeDeps(
+			seed([
+				[`${PKG_DIR}/style.md`, file(ruleText("Pkg style"))],
+				[`${ROOT_DIR}/style.md`, file(ruleText("Root style"))],
+				[`${B_DIR}/style.md`, file(ruleText("B style"))],
+				[`${GLOBAL_DIR}/style.md`, file(ruleText("Global style"))],
+			]),
+			[B_DIR],
+		);
+		const result = await discover(deps, new Map(), nestedOpts([B_DIR]));
+		expect(result.rules.map((rule) => `${rule.source}:${rule.id}`)).toEqual([
+			"project:style",
+			"project:style-2",
+			"project:style-3",
+			"global:style-4",
+		]);
+	});
+
+	it("rebases a nested rule's globs onto its OWN subtree and names its reference path", async () => {
+		const { deps } = fakeDeps(seed([[`${B_DIR}/nested.md`, file(globRuleText("Nested", ["src/**", "!src/**/*.test.ts"]))]]), [B_DIR]);
+		const result = await discover(deps, new Map(), nestedOpts([B_DIR]));
+		const nested = result.rules.find((rule) => rule.id === "nested");
+		// Both scales: cwd-relative (paths inside cwd) and absolute (the exists scan).
+		expect(nested?.globs).toContain("packages/b/src/**");
+		expect(nested?.globs).toContain("/repo/packages/a/packages/b/src/**");
+		expect(nested?.globs).toContain("!packages/b/src/**/*.test.ts");
+		expect(nested?.relativePath).toBe(normalizedPath("nested.md"));
+	});
+
+	it("enumerates nothing and lists nothing below an untrusted project", async () => {
+		const { deps, callLog } = fakeDeps(
+			seed([
+				[`${B_DIR}/b.md`, file(ruleText("B"))],
+				[`${GLOBAL_DIR}/g.md`, file(ruleText("Global"))],
+			]),
+			[B_DIR],
+		);
+		const result = await discover(deps, new Map(), nestedOpts([B_DIR], false));
+		expect(callLog.nested).toEqual([]);
+		expect(callLog.listed).toEqual([GLOBAL_DIR]);
+		expect(callLog.read).toEqual([`${GLOBAL_DIR}/g.md`]);
+		expect(result.rules.map((rule) => rule.id)).toEqual(["g"]);
+	});
+
+	it("never lists a nested dir under .git/node_modules or outside cwd", async () => {
+		const gitDir = `${PKG}/.git/.pi/rules`;
+		const modulesDir = `${PKG}/node_modules/pkg/.pi/rules`;
+		const outsideDir = "/etc/.pi/rules";
+		const { deps, callLog } = fakeDeps(
+			seed([
+				[`${gitDir}/git.md`, file(ruleText("Git"))],
+				[`${modulesDir}/vendored.md`, file(ruleText("Vendored"))],
+				[`${outsideDir}/escaped.md`, file(ruleText("Escaped"))],
+				[`${B_DIR}/b.md`, file(ruleText("B"))],
+				[`${GLOBAL_DIR}/g.md`, file(ruleText("Global"))],
+			]),
+			[gitDir, modulesDir, outsideDir, B_DIR],
+		);
+		const result = await discover(deps, new Map(), nestedOpts([gitDir, modulesDir, outsideDir, B_DIR]));
+		expect(callLog.listed).toEqual([PKG_DIR, ROOT_DIR, B_DIR, GLOBAL_DIR]);
+		expect(result.rules.map((rule) => rule.id)).toEqual(["b", "g"]);
+	});
+
+	it("reports a rejected enumeration as source-unreadable and keeps the other sources", async () => {
+		const { deps } = fakeDeps(
+			seed([
+				[`${PKG_DIR}/pkg.md`, file(ruleText("Pkg"))],
+				[`${GLOBAL_DIR}/g.md`, file(ruleText("Global"))],
+			]),
+		);
+		const failing: DiscoveryDeps = {
+			...deps,
+			listNestedRuleDirs: async () => {
+				throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+			},
+		};
+		const result = await discover(failing, new Map(), nestedOpts([]));
+		expect(result.rules.map((rule) => rule.id)).toEqual(["pkg", "g"]);
+		expect(result.errors).toEqual([
+			{
+				code: "source-unreadable",
+				message: expect.stringContaining("failed to enumerate nested rules sources"),
+				file: normalizedPath(PKG),
+			},
+		]);
+	});
+
+	it("adds no visible behavior when no nested dirs exist", async () => {
+		const { deps, callLog } = fakeDeps(
+			seed([
+				[`${PROJECT_DIR}/a.md`, file(ruleText("A"))],
+				[`${GLOBAL_DIR}/g.md`, file(ruleText("Global"))],
+			]),
+		);
+		const result = await discover(deps, new Map(), opts(true));
+		// The enumeration runs (once, at cwd) and reports nothing: the pass below
+		// is exactly the pre-T12 single-directory pass.
+		expect(callLog.nested).toEqual(["/work"]);
+		expect(callLog.listed).toEqual([PROJECT_DIR, GLOBAL_DIR]);
+		expect(result.rules.map((rule) => `${rule.source}:${rule.id}`)).toEqual(["project:a", "global:g"]);
+		expect(result.rules[0]?.globs).toBeUndefined();
+		expect(result.rules[0]?.relativePath).toBeUndefined();
+		expect([...result.cache.keys()]).toEqual([
+			normalizedPath(`${PROJECT_DIR}/a.md`),
+			normalizedPath(`${GLOBAL_DIR}/g.md`),
+		]);
+	});
+});
+
+describe("production adapters — nested enumeration (S10 nested half)", () => {
+	it("finds nested .pi/rules dirs and skips .git, node_modules and dirs beyond the depth bound", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-nested-"));
+		try {
+			const atBound = Array.from({ length: MAX_NESTED_RULES_DIR_DEPTH }, (_, index) => `d${index}`).join("/");
+			// `""` is cwd's OWN `.pi/rules`: the walk-up list already carries it, so the
+			// enumeration must not report it as a nested dir (no duplicate pass).
+			const bases = ["", "packages/b", "a/b/c", atBound, `${atBound}/deeper`, ".git/sub", "node_modules/pkg", "packages/b/node_modules/x"];
+			for (const base of bases) {
+				await mkdir(join(root, base, ".pi", "rules"), { recursive: true });
+			}
+			const found = await nodeDiscoveryDeps().listNestedRuleDirs(normalizedPath(root));
+			// The adapter reports what it found (cwd's own dir included); discovery's
+			// pure filter is what drops the non-nested entries.
+			expect(found.map((path) => path.slice(root.length + 1)).sort()).toEqual(
+				[".pi/rules", "a/b/c/.pi/rules", "packages/b/.pi/rules", `${atBound}/.pi/rules`].sort(),
+			);
+			// Filtered and ordered shallow-first: depth 1, depth 3, depth MAX.
+			expect(nestedProjectRuleDirs(normalizedPath(root), found).map((entry) => entry.base.slice(root.length + 1))).toEqual([
+				"packages/b",
+				"a/b/c",
+				atBound,
+			]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("never enumerates a rule dir behind a symlinked directory", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-nested-link-"));
+		const outside = await mkdtemp(join(tmpdir(), "pi-rules-md-nested-outside-"));
+		try {
+			await mkdir(join(outside, ".pi", "rules"), { recursive: true });
+			await mkdir(join(root, "packages/b/.pi/rules"), { recursive: true });
+			symlinkSync(outside, join(root, "linked"), "dir");
+			const found = await nodeDiscoveryDeps().listNestedRuleDirs(normalizedPath(root));
+			expect(found.map((path) => path.slice(root.length + 1))).toEqual(["packages/b/.pi/rules"]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+			await rm(outside, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves a missing cwd to an empty enumeration", async () => {
+		const found = await nodeDiscoveryDeps().listNestedRuleDirs(normalizedPath("/does/not/exist/anywhere"));
+		expect(found).toEqual([]);
 	});
 });

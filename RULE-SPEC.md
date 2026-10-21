@@ -11,6 +11,7 @@ pipeline applies the remaining semantics.
 | --- | --- | --- |
 | Project rules (cwd) | `<project>/.pi/rules/**/*.md` | the project is trusted (`ctx.isProjectTrusted()`) |
 | Project rules (ancestors) | every `<dir>/.pi/rules/**/*.md` for each `<dir>` between the working directory's parent and the enclosing git root (inclusive) | the project is trusted |
+| Project rules (nested) | `<cwd>/<dir>/…/.pi/rules/**/*.md` for each `<dir>` below the working directory, at most 6 directory segments deep, never under `.git/` or `node_modules/` | the project is trusted |
 | Global rules | `~/.pi/agent/rules/**/*.md` | always |
 
 The enclosing git root is resolved once per working directory from
@@ -38,22 +39,37 @@ walk-up bound, and an untrusted project reads no project directory at all
   `/rules` report may name a rebased form of the pattern in its reason.
 - **Rule id** = file stem, disambiguated across the whole merged pass:
   on collision the first file in deterministic order (cwd rules, then each
-  ancestor from nearest to the git root, then global; sorted by path within
-  each directory) keeps the bare stem; later collisions get `-2`, `-3`, … (e.g.
-  cwd `a.md` → `a`, git-root `a.md` → `a-2`, global `a.md` → `a-3`).
-- Project rules come first — cwd rules, then ancestor rules — and global rules
-  last; within a directory, files are sorted by path.
-- A rule from an ancestor directory is referenceable by its own
+  ancestor from nearest to the git root, then nested rules, then global; sorted
+  by path within each directory) keeps the bare stem; later collisions get
+  `-2`, `-3`, … (e.g. cwd `a.md` → `a`, git-root `a.md` → `a-2`, nested
+  `packages/b/.pi/rules/a.md` → `a-3`, global `a.md` → `a-4`).
+- Project rules come first — cwd rules, then ancestor rules, then nested
+  rules — and global rules last; within a directory, files are sorted by path.
+  Nested directories are ordered shallow-first (nearest to cwd before deeper)
+  and lexicographically within the same depth, so ordering never depends on
+  filesystem enumeration order.
+- A rule from an ancestor or nested directory is referenceable by its own
   rules-directory-relative path (`nested/rule.md`), like a cwd rule; a path that
-  repeats across directories resolves to the cwd rule (cwd rules are discovered
-  first).
-- Exists matching for ancestor `match: exists` / `both` rules scans the glob's
-  own root and compares absolute paths, so it never widens the scan beyond the
-  directories the globs name. Each distinct glob root costs one scan per cycle,
-  cached like any other scan.
-- **Nested descendant discovery** (`<project>/packages/*/.pi/rules` while the
-  working directory is above them) is a separate, still-pending step: only the
-  walk-up to the git root is implemented today.
+  repeats across directories resolves to the earliest discovered rule (cwd
+  first, then ancestors, then nested, then global).
+- Exists matching for ancestor or nested `match: exists` / `both` rules scans
+  the glob's own root and compares absolute paths, so it never widens the scan
+  beyond the directories the globs name. Each distinct glob root costs one scan
+  per cycle, cached like any other scan.
+- **Nested descendant discovery.** Rules are also discovered from `.pi/rules`
+  directories BELOW the working directory (`<cwd>/packages/b/.pi/rules` while
+  the working directory is the repository root). The enumeration is one bounded
+  search for `.pi/rules` below cwd: at most 6 directory segments deep (the rule
+  base `packages/b` counts as 2), never descending into `.git/` or
+  `node_modules/`, never following a symlinked subtree, and never accepting a
+  directory outside the working directory — so nothing outside the git root can
+  be reached this way either. A nested rule's globs are relative to its own base
+  the same way, prepended instead of consumed: `src/**` under
+  `<cwd>/packages/b/.pi/rules` matches the working-directory-relative
+  `packages/b/src/**` and the absolute `<cwd>/packages/b/src/**`, and never a
+  same-named path in `packages/a`. The enumeration runs once per discovery
+  cycle, and only for a trusted project: an untrusted project is never globbed,
+  and a project with no nested `.pi/rules` dirs behaves exactly as before.
 - An unlistable source (e.g. permission error) produces a
   `source-unreadable` error entry for `/rules` and contributes no rules;
   it never breaks the session. An unreadable file produces a

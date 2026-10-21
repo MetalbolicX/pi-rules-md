@@ -484,32 +484,52 @@ export const projectDirsForCycle = async (
 	gitRootOf: (cwd: string) => Promise<string | undefined>,
 ): Promise<readonly ProjectRuleDir[]> => (trusted ? projectRuleDirs(cwd, await gitRootOf(cwd)) : []);
 
+/**
+ * Builds the production discovery step with injected I/O (S10). The dirs are
+ * adjudicated here: the global `~/.pi/agent/rules`, plus — for a trusted project
+ * only — every `.pi/rules` from cwd up to the git root (walk-up) and every
+ * `.pi/rules` below cwd (the nested enumeration discovery performs itself behind
+ * the same trust gate). The mtime cache lives here, so one instance per
+ * deployment shares it across cycles (exactly what `piRulesMd` does).
+ *
+ * Exported because it is the seam the wiring tests drive: it is the same object
+ * the production factory installs, so an end-to-end test exercises the real
+ * walk-up + nested enumeration + rebasing path without a second composition.
+ */
+export const createProjectDiscovery = (
+	discoveryDeps: DiscoveryDeps,
+	gitRootOf: (cwd: string) => Promise<string | undefined>,
+	globalDir: string,
+): PipelineDeps["discover"] => {
+	const cache: Map<NormalizedPath, DiscoveryCacheEntry> = new Map();
+	return async (opts) => {
+		// Walk-up dirs come from the composition root; nested dirs are enumerated
+		// inside discovery, behind the same trust gate (which also keeps an
+		// untrusted project from being globbed at all).
+		const projectDirs = await projectDirsForCycle(opts.cwd, opts.isProjectTrusted, gitRootOf);
+		const result = await discoverRules(discoveryDeps, cache, {
+			globalDir,
+			projectDirs,
+			isProjectTrusted: opts.isProjectTrusted,
+			cwd: opts.cwd,
+		});
+		return { rules: result.rules, errors: result.errors };
+	};
+};
+
 /** The real extension factory: production discovery, exists-scan cache, budget, clock. */
 export default function piRulesMd(pi: ExtensionAPI): void {
-	const discoveryDeps: DiscoveryDeps = nodeDiscoveryDeps();
-	const cache: Map<NormalizedPath, DiscoveryCacheEntry> = new Map();
-	// Exists-scan cache (S8) around the rebasing scanner (S10): rebased ancestor
-	// globs are ABSOLUTE, so they must be scanned at their own root and returned
-	// absolute; the memo stays OUTERMOST so its (cwd, pattern set) key includes
-	// the rebased patterns themselves — a rule base change is a different
-	// question, never a stale hit.
+	// Exists-scan cache (S8) around the rebasing scanner (S10): rebased globs are
+	// ABSOLUTE, so they must be scanned at their own root and returned absolute;
+	// the memo stays OUTERMOST so its (cwd, pattern set) key includes the rebased
+	// patterns themselves — a rule base change is a different question, never a
+	// stale hit.
 	const scanCache = createCachedScanner(createScopedScanner(tinyglobbyScanner));
 	// One git-root query per cwd (see createGitRootMemo), shared by every cycle.
 	const gitRootOf = createGitRootMemo((command, args, options) => pi.exec(command, args, options));
 	const deps: ExtensionDeps = {
 		pipeline: {
-			discover: async (opts) => {
-				// Adjudicated dirs (parent-pinned, T13): global `~/.pi/agent/rules`, project
-				// rules from every `.pi/rules` between cwd and the git root (S10).
-				const projectDirs = await projectDirsForCycle(opts.cwd, opts.isProjectTrusted, gitRootOf);
-				const result = await discoverRules(discoveryDeps, cache, {
-					globalDir: globalRulesDir(homedir()),
-					projectDirs,
-					isProjectTrusted: opts.isProjectTrusted,
-					cwd: opts.cwd,
-				});
-				return { rules: result.rules, errors: result.errors };
-			},
+			discover: createProjectDiscovery(nodeDiscoveryDeps(), gitRootOf, globalRulesDir(homedir())),
 			scan: scanCache.scanner,
 			budget: resolveBudget(process.env.PI_RULES_MAX_TOKENS, DEFAULT_BUDGET_TOKENS),
 		},

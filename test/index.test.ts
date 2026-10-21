@@ -10,7 +10,10 @@
  * Record — exactly the mutation pi would see on `before_agent_start`.
  */
 import { describe, expect, it } from "vitest";
-import { createGitRootMemo, createRulesExtension, projectDirsForCycle } from "../index.ts";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createGitRootMemo, createProjectDiscovery, createRulesExtension, projectDirsForCycle } from "../index.ts";
 import type {
 	BeforeAgentStartLike,
 	ExtensionContextLike,
@@ -22,6 +25,8 @@ import type {
 import type { PiEventShape } from "../shell/collectors.ts";
 import { globMatcher } from "../src/conditions/predicates.ts";
 import { createCachedScanner } from "../shell/scan-cache.ts";
+import { nodeDiscoveryDeps, tinyglobbyScanner } from "../shell/discovery.ts";
+import { createScopedScanner } from "../shell/match.ts";
 import type { ReadRuleToolDefinition } from "../shell/read-rule.ts";
 import { DEFAULT_BUDGET_TOKENS } from "../shell/pipeline.ts";
 import type { DiscoverOptions } from "../shell/pipeline.ts";
@@ -1652,5 +1657,92 @@ describe("production discovery seam — git-root walk-up (S10)", () => {
 		const dirs = await projectDirsForCycle("/repo/packages/a", false, createGitRootMemo(exec));
 		expect(dirs).toEqual([]);
 		expect(calls).toEqual([]);
+	});
+});
+
+/**
+ * Rule file text for the nested-discovery wiring tests: real markdown that the
+ * production parser accepts, so the whole composition (enumeration → discovery
+ * → rebasing → engine) runs for real against a temp repo.
+ */
+const nestedRuleText = (description: string, globs: readonly string[], match: "touched" | "exists"): string =>
+	`---\ndescription: ${description}\nversion: 1\nglobs:\n${globs.map((glob) => `  - "${glob}"`).join("\n")}\nmatch: ${match}\n---\nNested body.\n`;
+
+/**
+ * ExtensionDeps wired exactly like the production composition root, except the
+ * global rules dir is a missing temp path (hermetic) and the scanner records
+ * every call before delegating to the real tinyglobby scanner. The discovery
+ * step is `createProjectDiscovery`, the same factory `piRulesMd` uses, so this
+ * exercises the real walk-up + nested enumeration + rebasing path.
+ */
+const productionNestedDeps = (root: string): {
+	readonly deps: ExtensionDeps;
+	readonly scanCalls: Array<{ readonly patterns: readonly string[]; readonly cwd: string }>;
+} => {
+	const scanCalls: Array<{ readonly patterns: readonly string[]; readonly cwd: string }> = [];
+	const cache = createCachedScanner(
+		createScopedScanner(async (patterns, cwd) => {
+			scanCalls.push({ patterns: [...patterns], cwd });
+			return tinyglobbyScanner(patterns, cwd);
+		}),
+	);
+	const deps: ExtensionDeps = {
+		pipeline: {
+			discover: createProjectDiscovery(nodeDiscoveryDeps(), async () => normalizedPath(root), join(root, "no-global-rules")),
+			scan: cache.scanner,
+			budget: DEFAULT_BUDGET_TOKENS,
+		},
+		now: () => NOW,
+		invalidateScan: cache.invalidate,
+		attach: true,
+	};
+	return { deps, scanCalls };
+};
+
+describe("nested rule discovery wiring (S10 nested half)", () => {
+	it("activates a nested rule on its own subtree's touched path, and not on a sibling's", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-wiring-nested-"));
+		try {
+			await mkdir(join(root, "packages/b/.pi/rules"), { recursive: true });
+			await writeFile(join(root, "packages/b/.pi/rules/nested.md"), nestedRuleText("Nested package rule", ["src/**"], "touched"));
+			const { deps } = productionNestedDeps(root);
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx(normalizedPath(root));
+			const sections: Record<string, string> = {};
+
+			// A sibling package is NOT the nested rule base's subtree.
+			await emitSignal(api, toolExecutionStart("read", join(root, "packages/a/src/x.ts")), ctx);
+			await emitStart(api, ctx, sections);
+			expect(sections["pi-rules-md"]).toBeUndefined();
+
+			await emitSignal(api, toolExecutionStart("read", join(root, "packages/b/src/x.ts")), ctx);
+			await emitStart(api, ctx, sections);
+			expect(sections["pi-rules-md"]).toContain("Nested package rule");
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("scans an exists-mode nested rule at the nested base", async () => {
+		const root = await mkdtemp(join(tmpdir(), "pi-rules-md-wiring-exists-"));
+		try {
+			await mkdir(join(root, "packages/b/.pi/rules"), { recursive: true });
+			await mkdir(join(root, "packages/b/src"), { recursive: true });
+			await writeFile(join(root, "packages/b/src/x.ts"), "export const x = 1;\n");
+			await writeFile(join(root, "packages/b/.pi/rules/nested-exists.md"), nestedRuleText("Nested exists rule", ["src/**"], "exists"));
+			const { deps, scanCalls } = productionNestedDeps(root);
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const ctx = handlerCtx(normalizedPath(root));
+			const sections: Record<string, string> = {};
+
+			await emitStart(api, ctx, sections);
+			expect(sections["pi-rules-md"]).toContain("Nested exists rule");
+			// The rebased absolute form is scanned at the nested base itself.
+			expect(scanCalls.map((call) => call.cwd)).toContain(normalizedPath(join(root, "packages/b/src")));
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 });
