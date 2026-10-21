@@ -51,8 +51,11 @@
  * - A missing directory contributes nothing and is not an error (the
  *   production `listRuleFiles` resolves ENOENT to []); a REJECTED
  *   `listRuleFiles` is collected as one `source-unreadable` error naming the
- *   directory — that source contributes no rules and no cache entries, and
- *   discovery continues with the remaining sources.
+ *   directory — that source contributes no files and no file cache entries,
+ *   and discovery continues with the remaining sources. The failed outcome
+ *   itself is CACHED (S13), keyed by the directory's own path, so later passes
+ *   re-report the same error without re-listing the directory; see
+ *   `sourceCacheStale` for the invalidation rule.
  * - A file that vanishes between listing and stat/read (ENOENT from stat or
  *   read) is skipped silently — no rule, no error, absent from the next
  *   cache. A non-ENOENT stat failure is collected as a `read-failure` error
@@ -151,9 +154,28 @@ export interface DiscoveryCacheEntry {
 	readonly mtimeMs: number;
 	readonly rule?: Rule;
 	readonly error?: RuleError;
+	/**
+	 * Set only on a SOURCE entry (S13): the `source-unreadable` error a rejected
+	 * `listRuleFiles` produced. Such entries are keyed by the unreadable
+	 * directory's own path and carry no rule and no file error; `mtimeMs` is the
+	 * directory's mtime at the failure, or {@link UNKNOWN_SOURCE_MTIME} when the
+	 * directory could not be stat-ed either. `loadRule` never sees one: a listed
+	 * file path is always `<dir>/<name>`, so it can never equal a directory key.
+	 */
+	readonly sourceUnreadable?: RuleError;
 }
 
-/** Immutable map from absolute normalized rule-file path to its cached outcome. */
+/**
+ * Directory mtime stand-in for an unreadable source that could not be stat-ed,
+ * so no baseline exists to compare against (see `sourceCacheStale`).
+ */
+const UNKNOWN_SOURCE_MTIME = -1;
+
+/**
+ * Immutable map from absolute normalized rule-file path to its cached outcome.
+ * It also holds the S13 source entries, keyed by the unreadable DIRECTORY's
+ * path (see `DiscoveryCacheEntry.sourceUnreadable`).
+ */
 export type DiscoveryCache = ReadonlyMap<NormalizedPath, DiscoveryCacheEntry>;
 
 /** Everything one discover call produces; `cache` is the fresh next cache. */
@@ -537,6 +559,10 @@ const loadRule = async (
  * enumeration loses the nested sources for that pass but never the walk-up
  * sources, the global source, or the session — and it is honest, because a
  * failed enumeration is not evidence that no nested rules exist.
+ *
+ * Not cached (S13 caches `listRuleFiles` failures only): the enumeration result
+ * feeds the walk-up list itself, so a cached failure would have to cache a
+ * directory list too, and the seam is one bounded glob per pass.
  */
 const enumerateNested = async (
 	deps: DiscoveryDeps,
@@ -553,6 +579,46 @@ const enumerateNested = async (
 		});
 		return [];
 	}
+};
+
+/**
+ * Directory mtime for the unreadable-source cache, or `undefined` when the
+ * directory cannot be stat-ed (permissions, race, wrong type) — the same
+ * ENOENT-agnostic total read the file path uses for its baseline.
+ */
+const sourceMtime = async (deps: DiscoveryDeps, dir: NormalizedPath): Promise<number | undefined> => {
+	try {
+		return (await deps.stat(dir)).mtimeMs;
+	} catch {
+		return undefined;
+	}
+};
+
+/**
+ * Whether a cached unreadable-source outcome must be re-attempted (S13). A
+ * directory has no file mtime to key on, so it is keyed on its OWN mtime:
+ *
+ * - a KNOWN baseline (the directory was stat-able at the failure) is stale only
+ *   when the directory's mtime changed — recovery is observed on the next pass
+ *   after the directory changes, and a directory that never changes is never
+ *   listed again;
+ * - no baseline (`UNKNOWN_SOURCE_MTIME`) is stale as soon as the directory
+ *   becomes stat-able at all: a stat that starts working IS the evidence of
+ *   change, so the source is re-attempted and then keeps the new baseline;
+ * - a directory that cannot be stat-ed now keeps the cached outcome: a failed
+ *   stat is not evidence of recovery.
+ *
+ * No TTL and no retry counter: the invalidation signal is the directory's own
+ * mtime, and the cost of a wrong guess is one extra listing, never a lost rule.
+ */
+const sourceCacheStale = (cachedMtimeMs: number, currentMtimeMs: number | undefined): boolean => {
+	if (cachedMtimeMs === UNKNOWN_SOURCE_MTIME) {
+		return currentMtimeMs !== undefined;
+	}
+	if (currentMtimeMs === undefined) {
+		return false;
+	}
+	return currentMtimeMs !== cachedMtimeMs;
 };
 
 /**
@@ -606,6 +672,15 @@ export const discover = async (
 	 * each file through its parser seam (stat/cache/read live in `loadRule`).
 	 * A rejected listing contributes one `source-unreadable` error and nothing
 	 * else, exactly like the pre-importer sources.
+	 *
+	 * Unreadable-source cache (S13): a directory whose listing rejected is cached
+	 * as ONE directory entry holding that error. A later pass re-reports the
+	 * cached error (so `/rules` output is unchanged) WITHOUT calling
+	 * `listRuleFiles` again, until `sourceCacheStale` says the directory may have
+	 * changed. Sources are keyed independently, so an unreadable project never
+	 * affects the global source (or any other importer/walk-up segment). A
+	 * successful listing leaves no directory entry behind — only file entries,
+	 * exactly as before.
 	 */
 	const loadSegment = async (
 		dir: string,
@@ -614,17 +689,39 @@ export const discover = async (
 		stemOf: (abs: NormalizedPath) => string,
 		parserOf: (abs: NormalizedPath) => RuleParser,
 	): Promise<void> => {
+		const sourceKey = normalizedPath(dir);
+		// One directory stat per segment at most: the re-attempt path needs the
+		// mtime both to decide and (on another failure) to re-baseline.
+		let probedMtime: { readonly value: number | undefined } | undefined;
+		const probeMtime = async (): Promise<number | undefined> => {
+			probedMtime ??= { value: await sourceMtime(deps, sourceKey) };
+			return probedMtime.value;
+		};
+		const cachedEntry = cache.get(sourceKey);
+		const cachedSource = cachedEntry?.sourceUnreadable;
+		if (cachedEntry !== undefined && cachedSource !== undefined) {
+			// A previous pass could not read this directory. Only the directory's own
+			// mtime (or a stat that starts working) says it is worth a second look.
+			if (!sourceCacheStale(cachedEntry.mtimeMs, await probeMtime())) {
+				errors.push(cachedSource);
+				nextCache.set(sourceKey, cachedEntry);
+				return;
+			}
+		}
 		let listed: readonly string[];
 		try {
 			listed = await deps.listRuleFiles(dir);
 		} catch (cause) {
 			// Totality: one unreadable source never fails the pass — it
 			// contributes nothing and the remaining sources continue.
-			errors.push({
+			const error: RuleError = {
 				code: "source-unreadable",
 				message: `failed to list rules source: ${cause instanceof Error ? cause.message : String(cause)}`,
 				file: dir,
-			});
+			};
+			const dirMtime = await probeMtime();
+			nextCache.set(sourceKey, { mtimeMs: dirMtime ?? UNKNOWN_SOURCE_MTIME, sourceUnreadable: error });
+			errors.push(error);
 			return;
 		}
 		const paths = listed.map((name) => resolveListed(dir, name)).filter(accept).sort();

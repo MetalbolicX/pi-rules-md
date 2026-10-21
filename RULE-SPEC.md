@@ -549,3 +549,10 @@ and reported: `yaml-syntax`, `missing-frontmatter`, `unknown-key`,
 `source-unreadable`. Error entries carry the offending file (or
 directory for `source-unreadable`) and are reused from the mtime cache
 while the file is unchanged.
+
+An unreadable source is cached the same way (v1.2): the `source-unreadable`
+outcome for a directory is recorded on the discovery cache, so a later pass
+re-reports the identical error — `/rules` output does not change — without
+listing that directory again, until the directory's own mtime changes (or,
+when it could not be stat-ed at the failure, the first stat that succeeds).
+Only the repetition cost changes, never what is reported.

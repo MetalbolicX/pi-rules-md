@@ -323,3 +323,70 @@ describe("selectRules", () => {
 		expect(droppedSummaries(result)).toEqual([{ id: "first", cause: "duplicate" }]);
 	});
 });
+
+/**
+ * Closes the two banked test-quality follow-ups from the v1 ledger
+ * (`odd/tasks/pi-rules-md.md`: "`at` undefined-element edge" and
+ * "budget-drop suffix assertion"). Both were gaps in how the pipeline was
+ * ASSERTED, not in what it does, and both live in this file's surface.
+ */
+describe("selection arrays are dense and complete (banked ledger pins)", () => {
+	/**
+	 * The banked edge: an index read (`list[i]`, `list.at(i)`) that can hand back
+	 * `undefined` for an IN-RANGE position turns an assertion into a silent skip
+	 * (`if (element === undefined) continue;`) — a broken stage then looks green.
+	 * Index/`.at()` assertions are only safe when every position of every array
+	 * the pipeline returns holds a real element, so that is what is pinned here.
+	 */
+	const dense = (list: readonly unknown[]): boolean => list.every((_, index) => list.at(index) !== undefined);
+
+	/** Every index 0..length-1 is an own property: no holes a loop could skip. */
+	const holeFree = (list: readonly unknown[]): boolean =>
+		Object.keys(list).length === list.length;
+
+	it("never yields an undefined element at any index of any selection array", () => {
+		const big = ruleWith({ id: "big", priority: 9, content: contentOfTokens(2, "a"), index: 0 });
+		const over = ruleWith({ id: "over", priority: 8, content: contentOfTokens(5, "b"), index: 1 });
+		const small = ruleWith({ id: "small", priority: 7, content: contentOfTokens(1, "c"), index: 2 });
+		const reference = ruleWith({ id: "reference", load: "on-demand", content: "ref", index: 3 });
+		const selection = selectRules([big, over, small, reference], 3);
+
+		// The fixture really exercises all three arrays (non-vacuous).
+		expect(activeIds(selection)).toEqual(["big", "small"]);
+		expect(selection.onDemand).toHaveLength(1);
+		expect(droppedSummaries(selection)).toEqual([{ id: "over", cause: "budget" }]);
+
+		for (const list of [selection.active, selection.onDemand, selection.dropped, selection.dropped.map((drop) => drop.rule)]) {
+			expect(dense(list)).toBe(true);
+			expect(holeFree(list)).toBe(true);
+		}
+		// Oracle check: the density probe itself detects an undefined element.
+		expect(dense([...selection.active, undefined])).toBe(false);
+	});
+
+	it("accounts for every candidate exactly once — active plus budget drops are complete", () => {
+		// The banked v1 wording asked for a "budget-drop suffix" assertion, because
+		// the fold then admitted a PREFIX and stopped at the first non-fit, so the
+		// drops were literally a trailing suffix. The fold is skip-and-continue now
+		// (b75b900), so the equivalent current contract is COMPLETENESS: every
+		// budgeted candidate is admitted once or dropped once, and the budget drops
+		// are exactly the candidates that did not fit.
+		const strong = ruleWith({ id: "strong", priority: 9, content: "aaaa" });
+		const twin = ruleWith({ id: "twin", priority: 9, content: "aaaa", index: 5 });
+		const huge = ruleWith({ id: "huge", priority: 5, content: contentOfTokens(5, "b") });
+		const tiny = ruleWith({ id: "tiny", priority: 1, content: "zzzz" });
+		const selection = selectRules([strong, twin, huge, tiny], 2);
+
+		// `twin` wins the duplicate tie (later index), so the candidate set is
+		// [twin, huge, tiny] in priority/budget order.
+		const budgetDrops = selection.dropped.filter((drop) => drop.cause === "budget");
+		expect(droppedSummaries(selection)).toEqual([
+			{ id: "strong", cause: "duplicate" },
+			{ id: "huge", cause: "budget" },
+		]);
+
+		const accounted = [...selection.active.map((rule) => rule.id), ...budgetDrops.map((drop) => drop.rule.id)];
+		expect([...accounted].sort()).toEqual(["tiny", "twin", "huge"].sort());
+		expect(new Set(accounted).size).toBe(accounted.length);
+	});
+});

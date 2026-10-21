@@ -293,8 +293,13 @@ describe("discover — source and read failures", () => {
 		expect(result.errors).toEqual([
 			{ code: "source-unreadable", message: expect.stringContaining("EACCES"), file: PROJECT_DIR },
 		]);
-		// The unreadable source contributed no cache entries.
-		expect([...result.cache.keys()]).toEqual([normalizedPath(`${GLOBAL_DIR}/g.md`)]);
+		// The unreadable source contributed no FILE cache entry — only the
+		// directory-level outcome S13 caches (see the unreadable-source suite).
+		expect([...result.cache.keys()]).toEqual([
+			normalizedPath(PROJECT_DIR),
+			normalizedPath(`${GLOBAL_DIR}/g.md`),
+		]);
+		expect(result.cache.get(normalizedPath(`${PROJECT_DIR}/a.md`))).toBeUndefined();
 	});
 
 	it("collects read-failure for a non-ENOENT read rejection and caches it by mtime", async () => {
@@ -319,6 +324,184 @@ describe("discover — source and read failures", () => {
 		const second = await discover(failing, first.cache, opts(true));
 		expect(callLog.read.filter((path) => path.endsWith("locked.md"))).toHaveLength(1);
 		expect(second.errors).toEqual(first.errors);
+	});
+});
+
+/**
+ * Mutable fake for the unreadable-source cache (S13): which directories reject
+ * `listRuleFiles`, and each directory's own mtime, can be changed BETWEEN
+ * passes — that is what makes recovery observable. Every listing attempt is
+ * recorded per directory so "listed once" is a count, not an inference.
+ */
+interface SourceFailureState {
+	readonly files: Map<string, FakeFile>;
+	readonly failing: Set<string>;
+	readonly dirMtimes: Map<string, number>;
+	readonly listed: string[];
+	readonly read: string[];
+}
+
+/** `stat` on a directory answers only when {@link SourceFailureState.dirMtimes} has it. */
+const sourceFailureDeps = (state: SourceFailureState): DiscoveryDeps => ({
+	listNestedRuleDirs: async () => [],
+	listRuleFiles: async (dir) => {
+		state.listed.push(dir);
+		if (state.failing.has(dir)) {
+			throw Object.assign(new Error(`EACCES: permission denied, scandir '${dir}'`), { code: "EACCES" });
+		}
+		const names: string[] = [];
+		for (const abs of state.files.keys()) {
+			if (abs.startsWith(`${dir}/`)) {
+				names.push(abs.slice(dir.length + 1));
+			}
+		}
+		return names.reverse();
+	},
+	stat: async (path) => {
+		const dirMtime = state.dirMtimes.get(path);
+		if (dirMtime !== undefined) {
+			return { mtimeMs: dirMtime };
+		}
+		const stored = state.files.get(path);
+		if (stored === undefined) {
+			throw enoent(path);
+		}
+		return { mtimeMs: stored.mtimeMs };
+	},
+	readFile: async (path) => {
+		state.read.push(path);
+		const stored = state.files.get(path);
+		if (stored === undefined) {
+			throw enoent(path);
+		}
+		return stored.content;
+	},
+});
+
+const sourceFailureState = (): SourceFailureState => ({
+	files: seed([[`${GLOBAL_DIR}/g.md`, file(ruleText("Global G"))]]),
+	failing: new Set([PROJECT_DIR]),
+	dirMtimes: new Map(),
+	listed: [],
+	read: [],
+});
+
+describe("discover — unreadable-source cache (S13)", () => {
+	it("reports the cached source-unreadable error without re-listing the directory", async () => {
+		const state = sourceFailureState();
+		const deps = sourceFailureDeps(state);
+
+		const first = await discover(deps, new Map(), opts(true));
+		expect(state.listed).toEqual([PROJECT_DIR, GLOBAL_DIR]);
+		expect(first.errors).toEqual([
+			{ code: "source-unreadable", message: expect.stringContaining("EACCES"), file: PROJECT_DIR },
+		]);
+		expect(first.rules.map((rule) => rule.id)).toEqual(["g"]);
+		// The cached outcome is a DIRECTORY entry: the error, no rule, no file error.
+		const cachedSource = first.cache.get(normalizedPath(PROJECT_DIR));
+		expect(cachedSource?.sourceUnreadable?.code).toBe("source-unreadable");
+		expect(cachedSource?.rule).toBeUndefined();
+		expect(cachedSource?.error).toBeUndefined();
+
+		// Second pass: the unreadable source is NOT listed again, the identical
+		// error is reported from cache (so /rules output is unchanged), and the
+		// readable sources behave exactly as before.
+		const second = await discover(deps, first.cache, opts(true));
+		expect(state.listed.filter((dir) => dir === PROJECT_DIR)).toHaveLength(1);
+		expect(state.listed.filter((dir) => dir === GLOBAL_DIR)).toHaveLength(2);
+		expect(second.errors).toHaveLength(1);
+		expect(second.errors[0]).toBe(first.errors[0]);
+		expect(second.rules).toEqual(first.rules);
+		// File-level mtime caching is untouched by the source entry: one read total.
+		expect(state.read).toEqual([`${GLOBAL_DIR}/g.md`]);
+		// `/rules` renders one `parse error: <file> (<code>): <message>` line per
+		// embedded error, so identical error arrays mean an identical report line:
+		// the cache changes repetition COST, never the output.
+		const reportLine = (error: { readonly code: string; readonly message: string; readonly file?: string }): string =>
+			`parse error: ${error.file ?? "unknown file"} (${error.code}): ${error.message}`;
+		expect(second.errors.map(reportLine)).toEqual(first.errors.map(reportLine));
+	});
+
+	it("re-attempts the source when the directory mtime changes and yields its rules", async () => {
+		const state = sourceFailureState();
+		state.dirMtimes.set(PROJECT_DIR, 1);
+		const deps = sourceFailureDeps(state);
+
+		const first = await discover(deps, new Map(), opts(true));
+		expect(first.errors).toHaveLength(1);
+		expect(state.listed.filter((dir) => dir === PROJECT_DIR)).toHaveLength(1);
+
+		// The directory becomes readable AND its mtime changed: the stale check
+		// re-lists it and its rules join the pass.
+		state.failing.delete(PROJECT_DIR);
+		state.files.set(`${PROJECT_DIR}/a.md`, file(ruleText("Project A"), 3));
+		state.dirMtimes.set(PROJECT_DIR, 2);
+		const second = await discover(deps, first.cache, opts(true));
+		expect(state.listed.filter((dir) => dir === PROJECT_DIR)).toHaveLength(2);
+		expect(second.errors).toEqual([]);
+		expect(second.rules.map((rule) => rule.id)).toEqual(["a", "g"]);
+	});
+
+	it("re-attempts a source whose directory could not be stat-ed as soon as stat succeeds", async () => {
+		const state = sourceFailureState();
+		const deps = sourceFailureDeps(state);
+
+		// First pass: the directory cannot be stat-ed either, so no baseline exists.
+		const first = await discover(deps, new Map(), opts(true));
+		expect(first.cache.get(normalizedPath(PROJECT_DIR))?.sourceUnreadable).toBeDefined();
+
+		// Still unstat-able: with no baseline to compare, the cached outcome stands
+		// and the directory is never listed again.
+		const second = await discover(deps, first.cache, opts(true));
+		expect(second.errors[0]).toBe(first.errors[0]);
+		expect(state.listed.filter((dir) => dir === PROJECT_DIR)).toHaveLength(1);
+
+		// The moment the directory can be stat-ed again there is no baseline to
+		// trust, so the source is re-attempted (and here it recovered).
+		state.failing.delete(PROJECT_DIR);
+		state.dirMtimes.set(PROJECT_DIR, 7);
+		state.files.set(`${PROJECT_DIR}/b.md`, file(ruleText("Project B"), 2));
+		const third = await discover(deps, second.cache, opts(true));
+		expect(state.listed.filter((dir) => dir === PROJECT_DIR)).toHaveLength(2);
+		expect(third.errors).toEqual([]);
+		expect(third.rules.map((rule) => rule.id)).toEqual(["b", "g"]);
+	});
+
+	it("keeps sources isolated: recovering one never re-lists the other", async () => {
+		const state = sourceFailureState();
+		state.failing.add(GLOBAL_DIR);
+		const deps = sourceFailureDeps(state);
+
+		const first = await discover(deps, new Map(), opts(true));
+		expect(first.errors.map((error) => error.file)).toEqual([PROJECT_DIR, GLOBAL_DIR]);
+		expect(first.rules).toEqual([]);
+
+		// Global recovers with a new directory mtime; the project stays cached.
+		state.failing.delete(GLOBAL_DIR);
+		state.dirMtimes.set(GLOBAL_DIR, 4);
+		const second = await discover(deps, first.cache, opts(true));
+		expect(second.rules.map((rule) => rule.id)).toEqual(["g"]);
+		expect(second.errors.map((error) => error.file)).toEqual([PROJECT_DIR]);
+		expect(state.listed.filter((dir) => dir === PROJECT_DIR)).toHaveLength(1);
+		expect(state.listed.filter((dir) => dir === GLOBAL_DIR)).toHaveLength(2);
+	});
+
+	it("keeps listing a readable source on every pass — the cache is for failures only", async () => {
+		const state = sourceFailureState();
+		state.failing.clear();
+		state.files.set(`${PROJECT_DIR}/a.md`, file(ruleText("Project A"), 2));
+		const deps = sourceFailureDeps(state);
+
+		const first = await discover(deps, new Map(), opts(true));
+		const second = await discover(deps, first.cache, opts(true));
+		expect(first.errors).toEqual([]);
+		expect(second.errors).toEqual([]);
+		expect(state.listed.filter((dir) => dir === PROJECT_DIR)).toHaveLength(2);
+		// A recovered source leaves no directory entry behind: only file entries.
+		expect([...second.cache.keys()].sort()).toEqual([
+			normalizedPath(`${GLOBAL_DIR}/g.md`),
+			normalizedPath(`${PROJECT_DIR}/a.md`),
+		].sort());
 	});
 });
 
