@@ -63,3 +63,13 @@ Three reproducible defects in the gentle-ai review facade (`gentle_review` tool 
 | review-a740aea94e62a9c6 | T4 registry/update/status | approved, burned |
 | review-f4cee70500256697 | T6 packaging/README | approved, burned |
 | review-ecc2ff0b7aafc3cf | F2+F3 hardening | approved, burned |
+
+## Addendum (2026-10-21, rules-v1-2 feature session)
+
+**New observation — Defect 2 variant: authority-revision rotation invalidates its own re-offered bindings.**
+Lineage `review-728484f14c25bdc3` (HIGH tier, 3 lenses, committed-only base-diff, plain START consent resolved normally). START returned binding revision `sha256:5bab9451…`; the very next bound STATUS reported authority revision `sha256:120f5ed3…` (generation 1) while its `collectBindings` still carried `--expected-revision=sha256:5bab9451…`. Four captures with byte-faithful copies of those STATUS bindings were refused:
+- `gentle_review_capture_group` ×3: `collectBindings must be the complete distinct current reviewer group in exact provider order` (one earlier attempt was a genuine mangled submission; the last two were verified faithful).
+- `gentle_review_capture` ×1 (single slot): `collectBinding is missing or stale for current STATUS`.
+No reviewer ran; `mutation_performed: false` on every rejection; authority unconsumed. Fresh STATUS before each retry re-offered identical bindings, so no slot ever became capturable. Disposition: parked as defect evidence per user decision (honest-fallback close on independent verification; no delivery claim made from this review). Candidate: commit `3fa8beb` (T11 ancestor discovery, 10 files, 1117 changed lines) in the same repository as the original report.
+
+Lineage inventory addendum: `review-792779f655e07d98` (T0 SDK fix) and `review-0555c72c8407c5fc` (explicit committed range) approved + acknowledged normally in this session — one with a single-slot retry after a malformed reviewer payload — so the group and single routes both remain intermittently functional, consistent with the state-dependent theory in Defect 2.
