@@ -8,7 +8,7 @@
  * caught by the frozen-object assertions.
  */
 import { describe, expect, it } from "vitest";
-import { initialState, transition } from "./state.ts";
+import { addedPaths, initialState, touchedPathsFromEntries, transition } from "./state.ts";
 import type { SessionState, StateEvent } from "./state.ts";
 import { normalizedPath } from "./types.ts";
 
@@ -82,6 +82,164 @@ describe("transition — paths_touched", () => {
 		const injected: SessionState = { touchedPaths: [], lastInjectedHash: "hash-1", mutedRuleIds: [] };
 		const next = transition(injected, { type: "paths_touched", paths: [normalizedPath("src/a.ts")] });
 		expect(next.lastInjectedHash).toBe("hash-1");
+	});
+});
+
+describe("transition — touched_paths_rebuilt", () => {
+	it("replaces the touched set wholesale, keeping mutes and the injected hash", () => {
+		const state: SessionState = {
+			touchedPaths: [normalizedPath("src/old.ts")],
+			lastInjectedHash: "abc123",
+			mutedRuleIds: ["noisy-rule"],
+		};
+		const next = transition(state, { type: "touched_paths_rebuilt", paths: [normalizedPath("src/new.ts")] });
+		expect(next).toEqual({
+			touchedPaths: [normalizedPath("src/new.ts")],
+			lastInjectedHash: "abc123",
+			mutedRuleIds: ["noisy-rule"],
+		});
+	});
+
+	it("dedupes the rebuilt set in first-seen order", () => {
+		const next = transition(initialState, {
+			type: "touched_paths_rebuilt",
+			paths: [normalizedPath("src/b.ts"), normalizedPath("src/a.ts"), normalizedPath("src/b.ts")],
+		});
+		expect(next.touchedPaths).toEqual([normalizedPath("src/b.ts"), normalizedPath("src/a.ts")]);
+	});
+
+	it("empties the touched set when the branch has no entries, keeping hash and mutes", () => {
+		const state: SessionState = {
+			touchedPaths: [normalizedPath("src/a.ts")],
+			lastInjectedHash: "abc123",
+			mutedRuleIds: ["a-rule"],
+		};
+		const next = transition(state, { type: "touched_paths_rebuilt", paths: [] });
+		expect(next.touchedPaths).toEqual([]);
+		expect(next.lastInjectedHash).toBe("abc123");
+		expect(next.mutedRuleIds).toEqual(["a-rule"]);
+	});
+
+	it("is a value-level no-op when the rebuilt set equals the current set (same reference)", () => {
+		const state: SessionState = {
+			touchedPaths: [normalizedPath("src/a.ts"), normalizedPath("src/b.ts")],
+			lastInjectedHash: undefined,
+			mutedRuleIds: ["a-rule"],
+		};
+		const event: StateEvent = {
+			type: "touched_paths_rebuilt",
+			paths: [normalizedPath("src/a.ts"), normalizedPath("src/b.ts")],
+		};
+		expect(transition(state, event)).toBe(state);
+		expect(transition(initialState, { type: "touched_paths_rebuilt", paths: [] })).toBe(initialState);
+	});
+
+	it("never mutates deep-frozen state or event inputs", () => {
+		const state: SessionState = {
+			touchedPaths: [normalizedPath("src/a.ts")],
+			lastInjectedHash: "abc123",
+			mutedRuleIds: [],
+		};
+		const event: StateEvent = { type: "touched_paths_rebuilt", paths: [normalizedPath("src/b.ts")] };
+		deepFreeze(state);
+		deepFreeze(event);
+
+		const next = transition(state, event);
+
+		expect(Object.isFrozen(state.touchedPaths)).toBe(true);
+		expect(Object.isFrozen(event.paths)).toBe(true);
+		expect(state.touchedPaths).toEqual([normalizedPath("src/a.ts")]);
+		expect(next.touchedPaths).toEqual([normalizedPath("src/b.ts")]);
+		expect(next.touchedPaths).not.toBe(event.paths);
+	});
+});
+
+describe("addedPaths", () => {
+	it("returns every path of a fresh two-path batch, in order", () => {
+		expect(addedPaths([], [normalizedPath("src/a.ts"), normalizedPath("src/b.ts")])).toEqual([
+			normalizedPath("src/a.ts"),
+			normalizedPath("src/b.ts"),
+		]);
+	});
+
+	it("returns nothing for a batch that only repeats already-touched paths", () => {
+		expect(addedPaths([normalizedPath("src/a.ts")], [normalizedPath("src/a.ts")])).toEqual([]);
+	});
+
+	it("keeps only the new paths of a mixed batch, in accumulation order", () => {
+		expect(
+			addedPaths(
+				[normalizedPath("src/a.ts")],
+				[normalizedPath("src/a.ts"), normalizedPath("src/c.ts"), normalizedPath("src/b.ts")],
+			),
+		).toEqual([normalizedPath("src/c.ts"), normalizedPath("src/b.ts")]);
+	});
+
+	it("dedupes a batch that repeats the same new path", () => {
+		expect(addedPaths([], [normalizedPath("src/a.ts"), normalizedPath("src/a.ts")])).toEqual([normalizedPath("src/a.ts")]);
+	});
+});
+
+describe("touchedPathsFromEntries", () => {
+	/** One `pi-rules-md/touched` custom entry, as `appendEntry` writes it. */
+	const touchedEntry = (paths: unknown): unknown => ({ type: "custom", customType: "pi-rules-md/touched", data: { paths } });
+
+	it("survives an entry whose data getter throws", () => {
+		const hostile: unknown = { type: "custom", customType: "pi-rules-md/touched" };
+		Object.defineProperty(hostile, "data", { get() { throw new Error("boom"); } });
+		const entries = [hostile, { type: "custom", customType: "pi-rules-md/touched", data: { paths: ["src/ok.ts"] } }];
+		expect(() => touchedPathsFromEntries(entries)).not.toThrow();
+		expect(touchedPathsFromEntries(entries)).toEqual([normalizedPath("src/ok.ts")]);
+	});
+
+	it("collects this extension's entries in branch order, deduped first-seen", () => {
+		const entries = [touchedEntry(["src/a.ts"]), { type: "message" }, touchedEntry(["src/b.ts", "src/a.ts"])];
+		expect(touchedPathsFromEntries(entries)).toEqual([normalizedPath("src/a.ts"), normalizedPath("src/b.ts")]);
+	});
+
+	it("normalizes separators while collecting", () => {
+		expect(touchedPathsFromEntries([touchedEntry(["src\\win\\a.ts"])])).toEqual([normalizedPath("src/win/a.ts")]);
+	});
+
+	it("ignores other custom types, custom messages, and non-custom entries", () => {
+		const entries = [
+			{ type: "custom", customType: "pi.virtual-model-state", data: { paths: ["src/other.ts"] } },
+			{ type: "custom_message", customType: "pi-rules-md/touched", content: "hello" },
+			{ type: "model_change", provider: "openai", modelId: "m" },
+			touchedEntry(["src/a.ts"]),
+		];
+		expect(touchedPathsFromEntries(entries)).toEqual([normalizedPath("src/a.ts")]);
+	});
+
+	it("ignores malformed entries and members without throwing", () => {
+		const entries = [
+			null,
+			undefined,
+			42,
+			"custom",
+			[],
+			{},
+			{ type: "custom" },
+			{ type: "custom", customType: "pi-rules-md/touched" },
+			{ type: "custom", customType: "pi-rules-md/touched", data: null },
+			{ type: "custom", customType: "pi-rules-md/touched", data: "src/a.ts" },
+			{ type: "custom", customType: "pi-rules-md/touched", data: { paths: "src/a.ts" } },
+			touchedEntry([1, null, undefined, "src/b.ts", {}]),
+		];
+
+		expect(() => touchedPathsFromEntries(entries)).not.toThrow();
+		expect(touchedPathsFromEntries(entries)).toEqual([normalizedPath("src/b.ts")]);
+	});
+
+	it("returns no paths when the branch itself is not an array", () => {
+		for (const entries of [null, undefined, "entries", 42, { length: 0 }]) {
+			expect(touchedPathsFromEntries(entries as unknown as readonly unknown[])).toEqual([]);
+		}
+	});
+
+	it("is deterministic for equal inputs", () => {
+		const entries = [touchedEntry(["src/a.ts", "src/b.ts"])];
+		expect(touchedPathsFromEntries(entries)).toEqual(touchedPathsFromEntries(entries));
 	});
 });
 

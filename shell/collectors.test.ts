@@ -39,6 +39,13 @@ describe("piEventToStateEvents — session event mapping", () => {
 		expect(piEventToStateEvents({ type: "session_before_switch" }, { cwd: CWD })).toEqual([{ type: "session_reset" }]);
 		expect(piEventToStateEvents({ type: "session_before_fork" }, { cwd: CWD })).toEqual([{ type: "session_reset" }]);
 	});
+
+	it("leaves session_start and session_tree to the wiring's branch rebuild (no state events here)", () => {
+		// The rebuild needs the session branch, which a pure event mapper cannot see:
+		// the collectors stay branch-free and the wiring folds touched_paths_rebuilt.
+		expect(piEventToStateEvents({ type: "session_start" }, { cwd: CWD })).toEqual([]);
+		expect(piEventToStateEvents({ type: "session_tree" }, { cwd: CWD })).toEqual([]);
+	});
 });
 
 describe("piEventToStateEvents — tool_execution_start path extraction", () => {

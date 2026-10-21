@@ -164,6 +164,18 @@ parses to `NaN`, or a non-positive parsed value uses the default. On-demand
 bodies do not consume this budget; their rendered index contributes to the
 final token estimate.
 
+## Session persistence
+
+Touched paths survive resume, reload, and tree navigation. Each newly touched
+path batch is appended to the session as a custom entry
+(`pi-rules-md/touched`, `{ paths: [...] }`) that never reaches the LLM, and on
+`session_start` (any reason) and `session_tree` the touched set is rebuilt from
+the current branch's entries. Resuming a session therefore restores exactly the
+paths its branch touched, and navigating to another branch drops paths recorded
+only on the abandoned one. Repeats are never written twice. Only touched paths
+persist: `/rules mute` state lives in memory for the current session — see
+[RULE-SPEC.md §5](RULE-SPEC.md#session-persistence-of-touched-paths).
+
 ## Install
 
 Recommended: install the npm package through the CLI wrapper:

@@ -11,6 +11,9 @@
  * - `SessionCompactEvent`      → `session_compact` (types.d.ts:613-621)
  * - `SessionBeforeSwitchEvent` → `session_before_switch` (types.d.ts:589-593)
  * - `SessionBeforeForkEvent`   → `session_before_fork` (types.d.ts:595-599)
+ * - `SessionStartEvent`        → `session_start` (types.d.ts:575-583); the
+ *   wiring reads the session branch for it, so this mapper contributes nothing
+ * - `SessionTreeEvent`         → `session_tree` (types.d.ts:664-670); same
  * - `ToolExecutionStartEvent` → `tool_execution_start` (carries
  *   `toolCallId`, `toolName`, and pre-execution `args`) — exact SDK declaration
  *   is in `dist/core/extensions/types.d.ts:853-860`.
@@ -22,6 +25,10 @@
  * Mapping:
  * - `session_compact`      → `[session_compact]` (hash hysteresis reset)
  * - `session_before_switch` and `session_before_fork` → `[session_reset]`
+ * - `session_start` and `session_tree` → `[]`: rebuilding touched paths needs
+ *   the session branch, which a pure event mapper cannot see. The index wiring
+ *   owns that fold (`touched_paths_rebuilt`), so these kinds stay branch-free
+ *   here instead of being silently mapped to a wrong reset.
  * - pre-execution read/edit/write/grep/find events use their built-in `args.path`
  *   to produce one `paths_touched`; bash and unknown tools produce no path event.
  *
@@ -48,6 +55,17 @@ export type PiEventShape =
 	| { readonly type: "session_compact" }
 	| { readonly type: "session_before_switch" }
 	| { readonly type: "session_before_fork" }
+	| {
+			readonly type: "session_start";
+			/** Why the session started; kept for mirror fidelity, not consumed. */
+			readonly reason?: "startup" | "reload" | "new" | "resume" | "fork";
+	  }
+	| {
+			readonly type: "session_tree";
+			/** Leaf the tree navigation arrived at; kept for mirror fidelity, not consumed. */
+			readonly newLeafId?: string | null;
+			readonly oldLeafId?: string | null;
+	  }
 	| {
 			readonly type: "tool_execution_start";
 			readonly toolCallId: string;
@@ -94,6 +112,10 @@ export const piEventToStateEvents = (
 			case "session_before_switch":
 			case "session_before_fork":
 				return [{ type: "session_reset" }];
+			case "session_start":
+			case "session_tree":
+				// Branch-dependent rebuild: folded by the index wiring, not here (see header).
+				return [];
 			case "tool_execution_start": {
 				const raw = extractPathArg(event.toolName, event.args);
 				return raw === undefined ? [] : [{ type: "paths_touched", paths: [toStatePath(raw, opts.cwd)] }];

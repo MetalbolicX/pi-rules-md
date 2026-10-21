@@ -150,6 +150,29 @@ These keys are verified against the installed Pi schemas in
 bash tool has no `workdir` argument. This is a deliberate runtime divergence:
 we do not parse paths from shell command strings.
 
+### Session persistence of touched paths
+
+Touched paths survive resume, reload, and tree navigation. Every newly touched
+path batch is appended to the session as a custom entry — `type: "custom"`,
+`customType: "pi-rules-md/touched"`, `data: { paths: [...] }` — carrying only
+the paths that batch added. A repeat of an already-touched path writes nothing,
+so a session never records the same path twice. These entries are session
+bookkeeping: they never participate in the LLM context and are never rendered.
+
+On `session_start` (every reason: startup, reload, new, resume, fork) and on
+`session_tree`, the touched set is **rebuilt** from the current branch
+(`ctx.sessionManager.getBranch()`): the branch's `pi-rules-md/touched` entries
+are read in order, normalized, deduplicated first-seen, and that result
+replaces the in-memory set. Resuming therefore restores exactly the paths the
+resumed branch recorded, and navigating to a different branch drops paths that
+only an abandoned branch recorded. A rebuild writes no entries and leaves the
+injected-block hash untouched.
+
+Only touched paths persist. `/rules mute` state is in memory: a session switch
+or fork starts unmuted, and a resumed session does not restore earlier mutes.
+If the branch cannot be read at all, the rebuild is a no-op — the session keeps
+the paths it already folded instead of assuming the branch is empty.
+
 ## 6. Selection, budget, rendering
 
 - Every discovered rule receives a monotonic `index` in discovery order:
@@ -221,7 +244,10 @@ we do not parse paths from shell command strings.
   confirmation line, `muted: <id>` or `unmuted: <id>`. Muting is by rule id,
   so a re-discovered unchanged rule stays muted, re-muting an already muted
   rule is a no-op, and mutes survive compaction. Mute state is session state:
-  a session switch or fork clears it along with touched paths. `mute`/`unmute`
+  a session switch or fork clears it along with touched paths (which are then
+  rebuilt from the new branch's entries, see
+  [Session persistence of touched paths](#session-persistence-of-touched-paths)).
+  `mute`/`unmute`
   without exactly one id prints the usage line.
 - Rendered as one `pi-rules-md` system-prompt section: `# Rules` header,
   framing line, one entry per selected pinned rule (`## <description>`), optional
@@ -270,6 +296,11 @@ we do not parse paths from shell command strings.
   `> Triggered by` line and before the body. `inform` is the default and adds
   nothing, so v1.1 output stays byte-identical. Presentation order is
   unchanged: `enforcement` is a budget-admission key, not a display key.
+- Touched paths are no longer session-memory only. Each newly touched path
+  batch is persisted as a `pi-rules-md/touched` custom session entry, and
+  `session_start`/`session_tree` rebuild the touched set from the current
+  branch, so a resumed session keeps its paths while tree navigation drops the
+  abandoned branch's. Session mutes stay in memory and are not persisted.
 
 ## 7. Errors (visible via `/rules`)
 

@@ -24,6 +24,13 @@
  *   `{ stdout, stderr, code, killed }` (`dist/core/exec.d.ts`). The branch seam
  *   consumes only `stdout` and `code`, and resolves the session branch once per
  *   `before_agent_start`; every git failure degrades to "no branch".
+ * - `appendEntry(customType, data)` is still on `ExtensionAPI`
+ *   (`dist/core/extensions/types.d.ts:1272`): it appends a custom session entry
+ *   that never reaches the LLM. It is the touched-path persistence channel.
+ * - `ExtensionContext.sessionManager` is still a `ReadonlySessionManager`
+ *   (`dist/core/extensions/types.d.ts:223`), whose `getBranch(fromId?)`
+ *   (`dist/core/session-manager.d.ts:311`) walks root → leaf. The rebuild seam
+ *   consumes only `getBranch`.
  */
 import { homedir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -39,11 +46,21 @@ import type { ReadRuleToolDefinition } from "./shell/read-rule.ts";
 import { DEFAULT_BUDGET_TOKENS, renderTraceReport, runInjectionCycle } from "./shell/pipeline.ts";
 import { globalRulesDir, projectRulesDir, resolveBudget } from "./shell/rules-paths.ts";
 import type { PipelineDeps } from "./shell/pipeline.ts";
-import { initialState, transition } from "./src/state.ts";
+import { TOUCHED_ENTRY_TYPE, addedPaths, initialState, touchedPathsFromEntries, transition } from "./src/state.ts";
 import type { SessionState } from "./src/state.ts";
 import { sectionId } from "./src/render.ts";
 import { explainPath, renderRuleDetail } from "./src/explain.ts";
 import type { EvaluationTrace, NormalizedPath, Rule, RuleError } from "./src/types.ts";
+
+/**
+ * Mirror of pi 1.3.0 `ReadonlySessionManager` (`dist/core/extensions/types.d.ts:223`,
+ * `dist/core/session-manager.d.ts:178`), limited to the branch read this wiring
+ * performs: `SessionManager.getBranch(fromId?)` at
+ * `dist/core/session-manager.d.ts:311`, returning the entries root → leaf.
+ */
+export interface SessionManagerLike {
+	readonly getBranch: (fromId?: string) => readonly unknown[];
+}
 
 /** Handler context fields the wiring consumes (mirror of pi ExtensionContext). */
 export interface ExtensionContextLike {
@@ -55,6 +72,8 @@ export interface ExtensionContextLike {
 	readonly hasUI: boolean;
 	/** Mirror of pi 1.3.0 `ExtensionUIContext.setStatus` (`dist/core/extensions/types.d.ts:81`): the only ui method the wiring consumes. */
 	readonly ui: { readonly setStatus: (key: string, text: string | undefined) => void };
+	/** Mirror of pi 1.3.0 `ExtensionContext.sessionManager` (`dist/core/extensions/types.d.ts:223`): touched paths are rebuilt from the branch. */
+	readonly sessionManager: SessionManagerLike;
 }
 
 /** Mirror of pi `BeforeAgentStartEvent` limited to the wiring's mutation surface. */
@@ -100,10 +119,18 @@ export interface PiExtensionApiLike {
 	on(event: "session_compact", handler: SignalHandler): unknown;
 	on(event: "session_before_switch", handler: SignalHandler): unknown;
 	on(event: "session_before_fork", handler: SignalHandler): unknown;
+	on(event: "session_start", handler: SignalHandler): unknown;
+	on(event: "session_tree", handler: SignalHandler): unknown;
 	on(event: "before_agent_start", handler: (event: BeforeAgentStartLike, ctx: ExtensionContextLike) => unknown): unknown;
 	registerCommand(name: string, options: RulesCommandOptions): void;
 	/** Structural mirror of the installed Pi registerTool definition. */
 	registerTool(tool: ReadRuleToolDefinition): void;
+	/**
+	 * Structural mirror of pi 1.3.0 `ExtensionAPI.appendEntry`
+	 * (`dist/core/extensions/types.d.ts:1272`): appends a custom session entry for
+	 * state persistence (`customType` plus JSON data); never sent to the LLM.
+	 */
+	appendEntry(customType: string, data?: unknown): void;
 	/**
 	 * Structural mirror of pi's `exec` (installed 1.3.0 `dist/core/exec.d.ts`),
 	 * limited to the fields the branch seam consumes. Production passes the real
@@ -145,13 +172,38 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 		// Signal events fold into state through the collector + reducer.
 		const foldSignal = (event: PiEventShape, ctx: ExtensionContextLike): void => {
 			for (const stateEvent of piEventToStateEvents(event, { cwd: ctx.cwd })) {
-				state = transition(state, stateEvent);
+				const next = transition(state, stateEvent);
+				// Persistence (S7): a touched path batch is written to the session as one
+				// custom entry carrying only the NEWLY added paths. A repeat is a
+				// value-level no-op in the reducer, so it writes nothing.
+				const added = addedPaths(state.touchedPaths, next.touchedPaths);
+				if (added.length > 0) {
+					api.appendEntry(TOUCHED_ENTRY_TYPE, { paths: [...added] });
+				}
+				state = next;
 			}
 		};
 		api.on("tool_execution_start", foldSignal);
 		api.on("session_compact", foldSignal);
 		api.on("session_before_switch", foldSignal);
 		api.on("session_before_fork", foldSignal);
+
+		// Persistence (S7): resume/reload and tree navigation rebuild the touched set
+		// from the CURRENT branch, so a resumed session restores exactly what its
+		// branch recorded, and navigating away drops paths from an abandoned branch.
+		// Guarded like the collectors: this runs inside pi's event dispatch, where a
+		// throw is fatal, and an unreadable branch is not evidence of an empty one —
+		// so the fold degrades to leaving the session state untouched. The event kind
+		// and its reason are irrelevant: only the branch matters.
+		const rebuildTouchedPaths = (_event: PiEventShape, ctx: ExtensionContextLike): void => {
+			try {
+				state = transition(state, { type: "touched_paths_rebuilt", paths: touchedPathsFromEntries(ctx.sessionManager.getBranch()) });
+			} catch {
+				// Session history unavailable: keep the state this session already folded.
+			}
+		};
+		api.on("session_start", rebuildTouchedPaths);
+		api.on("session_tree", rebuildTouchedPaths);
 
 		api.on("before_agent_start", async (event, ctx) => {
 			// One git ref query per turn: total by contract (shell/git-branch.ts),

@@ -56,13 +56,54 @@ const ruleWith = (fields: {
 	content: fields.content ?? `body of ${fields.id ?? "always-on"}\n`,
 });
 
-/** Fake handler context: cwd + trust + model id + ui surface, nothing else. */
+/** Fake handler context: cwd + trust + model id + ui surface + an empty session branch. */
 const handlerCtx = (cwd: string, trusted = true, model?: string): ExtensionContextLike => ({
 	cwd,
 	isProjectTrusted: () => trusted,
 	model: model === undefined ? undefined : { id: model },
 	hasUI: false,
 	ui: { setStatus: () => undefined },
+	sessionManager: { getBranch: () => [] },
+});
+
+/** A session custom entry as `pi` returns it on the branch for `appendEntry`. */
+const touchedEntry = (paths: readonly string[]): { readonly type: "custom"; readonly customType: string; readonly data: unknown } => ({
+	type: "custom",
+	customType: "pi-rules-md/touched",
+	data: { paths },
+});
+
+/**
+ * Fake session manager: `getBranch` reports whatever branch the test sets last,
+ * so a test can model tree navigation between branches.
+ */
+const fakeSession = (
+	initial: readonly unknown[] = [],
+): {
+	readonly sessionManager: ExtensionContextLike["sessionManager"];
+	readonly setBranch: (next: readonly unknown[]) => void;
+	readonly branchCalls: () => number;
+} => {
+	let branch = initial;
+	let calls = 0;
+	return {
+		sessionManager: {
+			getBranch: () => {
+				calls += 1;
+				return branch;
+			},
+		},
+		setBranch: (next) => {
+			branch = next;
+		},
+		branchCalls: () => calls,
+	};
+};
+
+/** Fake handler context carrying an explicit session branch. */
+const ctxWithSession = (sessionManager: ExtensionContextLike["sessionManager"], cwd = "/work"): ExtensionContextLike => ({
+	...handlerCtx(cwd),
+	sessionManager,
 });
 
 /** Fake handler context that records every ui.setStatus call, with hasUI switchable. */
@@ -77,6 +118,7 @@ const ctxWithStatus = (
 		model: undefined,
 		hasUI,
 		ui: { setStatus: (key, text) => { statuses.push([key, text]); } },
+		sessionManager: { getBranch: () => [] },
 	};
 	return { ctx, statuses };
 };
@@ -150,18 +192,26 @@ const fakeExec = (answer: ExecResultLike | Error = { stdout: "", code: 128 }): {
 	return { exec, calls };
 };
 
-/** Typed fake pi api: records subscriptions per event name plus commands. */
+/** One recorded fake `appendEntry` call (session persistence surface). */
+interface AppendedEntry {
+	readonly customType: string;
+	readonly data: unknown;
+}
+
+/** Typed fake pi api: records subscriptions per event name plus commands and session entries. */
 const fakeApi = (exec: ExecLike = fakeExec().exec): {
 	readonly api: PiExtensionApiLike;
 	readonly signals: Map<string, Array<(event: PiEventShape, ctx: ExtensionContextLike) => unknown>>;
 	readonly starts: Array<(event: BeforeAgentStartLike, ctx: ExtensionContextLike) => unknown>;
 	readonly commands: Map<string, RulesCommandOptions>;
 	readonly tools: Map<string, ReadRuleToolDefinition>;
+	readonly entries: AppendedEntry[];
 } => {
 	const signals = new Map<string, Array<(event: PiEventShape, ctx: ExtensionContextLike) => unknown>>();
 	const starts: Array<(event: BeforeAgentStartLike, ctx: ExtensionContextLike) => unknown> = [];
 	const commands = new Map<string, RulesCommandOptions>();
 	const tools = new Map<string, ReadRuleToolDefinition>();
+	const entries: AppendedEntry[] = [];
 	const api = {
 		on(event: string, handler: (event: PiEventShape | BeforeAgentStartLike, ctx: ExtensionContextLike) => unknown): unknown {
 			if (event === "before_agent_start") {
@@ -174,6 +224,9 @@ const fakeApi = (exec: ExecLike = fakeExec().exec): {
 			return () => undefined;
 		},
 		exec,
+		appendEntry(customType: string, data?: unknown): void {
+			entries.push({ customType, data });
+		},
 		registerCommand(name: string, options: RulesCommandOptions): void {
 			commands.set(name, options);
 		},
@@ -181,7 +234,7 @@ const fakeApi = (exec: ExecLike = fakeExec().exec): {
 			tools.set(tool.name, tool);
 		},
 	};
-	return { api: api as PiExtensionApiLike, signals, starts, commands, tools };
+	return { api: api as PiExtensionApiLike, signals, starts, commands, tools, entries };
 };
 
 /** Invokes every captured handler for one pi signal event. */
@@ -241,7 +294,7 @@ const invokeRules = async (api: ReturnType<typeof fakeApi>, args = ""): Promise<
 };
 
 describe("createRulesExtension registration", () => {
-	it("subscribes exactly the four signal events plus before_agent_start and registers /rules", () => {
+	it("subscribes exactly the six signal events plus before_agent_start and registers /rules", () => {
 		const { deps } = depsWith({ rules: [] });
 		const api = fakeApi();
 		createRulesExtension(deps)(api.api);
@@ -250,6 +303,8 @@ describe("createRulesExtension registration", () => {
 			"session_before_fork",
 			"session_before_switch",
 			"session_compact",
+			"session_start",
+			"session_tree",
 			"tool_execution_start",
 		]);
 		for (const handlers of api.signals.values()) {
@@ -753,5 +808,198 @@ describe("createRulesExtension branch resolution", () => {
 			{ command: "git", args: BRANCH_ARGS, cwd: "/work" },
 			{ command: "git", args: BRANCH_ARGS, cwd: "/work" },
 		]);
+	});
+});
+
+describe("session persistence (S7)", () => {
+	it("appends a custom session entry for each newly touched path batch", async () => {
+		const { deps } = depsWith({ rules: [] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		await emitSignal(api, toolExecutionStart("edit", "/work/src/b.ts"), ctx);
+
+		expect(api.entries).toEqual([
+			{ customType: "pi-rules-md/touched", data: { paths: [normalizedPath("src/a.ts")] } },
+			{ customType: "pi-rules-md/touched", data: { paths: [normalizedPath("src/b.ts")] } },
+		]);
+	});
+
+	it("appends nothing when the touched path is already in the session set", async () => {
+		const { deps } = depsWith({ rules: [] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		for (const toolName of ["read", "edit", "write"]) {
+			await emitSignal(api, toolExecutionStart(toolName, "/work/src/a.ts"), ctx);
+		}
+
+		expect(api.entries).toEqual([{ customType: "pi-rules-md/touched", data: { paths: [normalizedPath("src/a.ts")] } }]);
+	});
+
+	it("appends nothing for lifecycle events and tools that touch no path", async () => {
+		const { deps } = depsWith({ rules: [] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitSignal(api, toolExecutionStart("bash", "/work/src/a.ts"), ctx);
+		await emitSignal(api, { type: "session_compact" }, ctx);
+		await emitSignal(api, { type: "session_before_switch" }, ctx);
+		await emitSignal(api, { type: "session_before_fork" }, ctx);
+
+		expect(api.entries).toEqual([]);
+	});
+
+	it("restores touched paths from the branch on session_start and never re-writes them", async () => {
+		const rules = [
+			ruleWith({ id: "a-rule", globs: ["src/a.ts"], match: "touched", alwaysApply: false }),
+			ruleWith({ id: "c-rule", globs: ["src/c.ts"], match: "touched", alwaysApply: false }),
+		];
+		const { deps } = depsWith({ rules });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const session = fakeSession([touchedEntry(["src/a.ts"]), { type: "message" }]);
+		const ctx = ctxWithSession(session.sessionManager);
+
+		await emitSignal(api, { type: "session_start" }, ctx);
+
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections["pi-rules-md"]).toContain("test rule a-rule");
+		expect(sections["pi-rules-md"]).not.toContain("test rule c-rule");
+		expect(await invokeRules(api)).toContain("inactive: c-rule");
+		expect(session.branchCalls()).toBe(1);
+		// Rebuild restores state; it is not a new touch batch, so it writes nothing.
+		expect(api.entries).toEqual([]);
+
+		// A restored path is already known: touching it again appends nothing,
+		// while a genuinely new path appends exactly that path.
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		expect(api.entries).toEqual([]);
+		await emitSignal(api, toolExecutionStart("read", "/work/src/c.ts"), ctx);
+		expect(api.entries).toEqual([{ customType: "pi-rules-md/touched", data: { paths: [normalizedPath("src/c.ts")] } }]);
+	});
+
+	it("rebuilds on every session_start reason", async () => {
+		for (const reason of ["startup", "reload", "new", "resume", "fork"] as const) {
+			const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false });
+			const { deps } = depsWith({ rules: [rule] });
+			const api = fakeApi();
+			createRulesExtension(deps)(api.api);
+			const session = fakeSession([touchedEntry(["src/a.ts"])]);
+			const ctx = ctxWithSession(session.sessionManager);
+
+			await emitSignal(api, { type: "session_start", reason }, ctx);
+			const sections: Record<string, string> = {};
+			await emitStart(api, ctx, sections);
+			expect(sections["pi-rules-md"]).toContain("test rule touched-rule");
+		}
+	});
+
+	it("empties the touched set when session_start lands on an entry-free branch", async () => {
+		const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const session = fakeSession([]);
+		const ctx = ctxWithSession(session.sessionManager);
+
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		await emitSignal(api, { type: "session_start" }, ctx);
+
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections).not.toHaveProperty("pi-rules-md");
+		expect(await invokeRules(api)).toContain("inactive: touched-rule");
+	});
+
+	it("drops paths from an abandoned branch on session_tree", async () => {
+		const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const session = fakeSession([]);
+		const ctx = ctxWithSession(session.sessionManager);
+
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		const before: Record<string, string> = {};
+		await emitStart(api, ctx, before);
+		expect(before["pi-rules-md"]).toContain("test rule touched-rule");
+
+		// Navigate to a branch that carries none of this extension's entries.
+		session.setBranch([{ type: "message" }]);
+		await emitSignal(api, { type: "session_tree", newLeafId: "entry-2", oldLeafId: "entry-1" }, ctx);
+
+		const after: Record<string, string> = {};
+		await emitStart(api, ctx, after);
+		expect(after).not.toHaveProperty("pi-rules-md");
+		expect(await invokeRules(api)).toContain("inactive: touched-rule");
+	});
+
+	it("keeps session mutes across a rebuild", async () => {
+		const { deps } = depsWith({ rules: [ruleWith({ id: "always-on" })] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const session = fakeSession([touchedEntry(["src/a.ts"])]);
+		const ctx = ctxWithSession(session.sessionManager);
+
+		await emitStart(api, ctx);
+		expect(await invokeRules(api, "mute always-on")).toBe("muted: always-on");
+
+		await emitSignal(api, { type: "session_start" }, ctx);
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections).not.toHaveProperty("pi-rules-md");
+		expect(await invokeRules(api)).toContain("inactive: always-on (muted for this session)");
+	});
+
+	it("keeps the injected-block hash across a rebuild (the removal path still fires)", async () => {
+		const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const session = fakeSession([]);
+		const ctx = ctxWithSession(session.sessionManager);
+
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections["pi-rules-md"]).toContain("test rule touched-rule");
+
+		// The rebuild lands on a branch without our entries, so nothing is active.
+		// A retained hash makes the decision `remove` (stale section deleted); a
+		// cleared hash would decide `none` and leave the stale section in place.
+		sections["pi-rules-md"] = "SENTINEL";
+		await emitSignal(api, { type: "session_start" }, ctx);
+		await emitStart(api, ctx, sections);
+		expect(sections).not.toHaveProperty("pi-rules-md");
+	});
+
+	it("leaves the folded state untouched when the branch cannot be read, never throwing", async () => {
+		const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx: ExtensionContextLike = {
+			...handlerCtx("/work"),
+			sessionManager: {
+				getBranch: () => {
+					throw new Error("session unreadable");
+				},
+			},
+		};
+
+		await emitSignal(api, toolExecutionStart("read", "/work/src/a.ts"), ctx);
+		await expect(emitSignal(api, { type: "session_start" }, ctx)).resolves.toBeUndefined();
+		await expect(emitSignal(api, { type: "session_tree" }, ctx)).resolves.toBeUndefined();
+
+		// An unreadable branch is not evidence of an empty one: the touched path survives.
+		const sections: Record<string, string> = {};
+		await emitStart(api, ctx, sections);
+		expect(sections["pi-rules-md"]).toContain("test rule touched-rule");
 	});
 });
