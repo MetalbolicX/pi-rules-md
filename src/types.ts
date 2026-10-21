@@ -79,9 +79,17 @@ export interface Rule {
 	readonly match: MatchMode;
 	/** Tool names that trigger the rule. Absent means "no tool trigger". */
 	readonly tools?: readonly string[];
-	/** Git branch that triggers the rule. Absent means "any branch". */
+	/**
+	 * Git branch pattern that triggers the rule: a case-sensitive picomatch glob
+	 * over the live branch name, where an exact name is the degenerate pattern.
+	 * The branch is resolved from git per turn. Absent means "any branch".
+	 */
 	readonly branch?: string;
-	/** Model name that triggers the rule. Absent means "any model". */
+	/**
+	 * Model id pattern that triggers the rule: a case-sensitive picomatch glob
+	 * over the session model id, where an exact id is the degenerate pattern.
+	 * Absent means "any model".
+	 */
 	readonly model?: string;
 	/** Sort weight for selection; higher wins. Defaults to 0 at parse time. */
 	readonly priority: number;
@@ -137,9 +145,16 @@ export interface EvaluationContext {
 	readonly intentGlobs?: readonly string[];
 	/** Tool names available/active in this session. */
 	readonly toolNames: readonly string[];
-	/** Active model name, when known. */
+	/**
+	 * Active model id, when known. Matched as a case-sensitive picomatch pattern
+	 * target (`model` conditions), never as an exact string only.
+	 */
 	readonly model?: string;
-	/** Active git branch, when known. */
+	/**
+	 * Active git branch resolved from the live repository, when known. Matched as
+	 * a case-sensitive picomatch pattern target (`branch` conditions); absent
+	 * outside git, on a detached HEAD, or when git fails.
+	 */
 	readonly branch?: string;
 }
 

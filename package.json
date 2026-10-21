@@ -1,6 +1,6 @@
 {
 	"name": "pi-rules-md",
-	"version": "0.1.1",
+	"version": "0.2.0",
 	"description": "Pi extension that discovers markdown rules and injects conditionally matched ones into the system prompt. Functional core, imperative shell.",
 	"type": "module",
 	"keywords": [

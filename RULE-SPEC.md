@@ -510,6 +510,41 @@ to that result, instead of waiting for the next turn. The pure core
 - The pinned entry heading is `## <description>` (not `## <id>`), matching the
   renderer and its contract tests.
 
+### Added in v1.2
+
+v1.2 also adds capabilities v1.1 never had. Each one is additive; the changes
+that can alter the meaning of an existing v1.1 rule file are listed separately
+in the next subsection.
+
+- **`/rules` visibility.** The report gains `budget: <used>/<budget> estimated
+  tokens` (pinned active bodies only) and, while a section is injected,
+  `section: ~<estimatedTokens> tokens`, and UI modes (TUI/RPC) get the
+  `pi-rules-md` status-bar entry `rules: <pinned-active> · ~<tokens> tok`
+  (§6).
+- **Read-only `/rules` subcommands.** `show <id>` prints one rule in full and
+  `why <path>` explains what a path would activate; the same path report is
+  available outside a session as `pi-rules explain <path>` (§6).
+- **Session mute.** `/rules mute <id>` and `/rules unmute <id>` exclude or
+  re-include one rule for the current session; the mute wins over both
+  `alwaysApply` and the trust gate and resets on session switch/fork (§6).
+- **Exists-scan cache.** The `exists` scan is reused per working directory and
+  glob set and dropped after a `write`/`edit`/`bash` result or a glob-set
+  change, without changing which files matching sees
+  ([Exists-scan cache](#exists-scan-cache)).
+- **Mid-run attachment.** A rule that just became active is appended to the
+  `read`/`edit`/`write` result that activated it, once per session
+  ([Mid-run attachment](#mid-run-attachment)); `PI_RULES_ATTACH=off` disables
+  it.
+- **Monorepo discovery.** Ancestor `.pi/rules` directories up to the enclosing
+  git root and nested `.pi/rules` directories below the working directory are
+  discovered too, each rule keeping the glob base of the directory that owns
+  its `.pi/` folder (§1).
+- **Importers.** Copilot's `.github/instructions` and Claude's `.claude/rules`
+  are read in place and become ordinary project rules (§1);
+  `PI_RULES_IMPORT=none` disables them.
+- **Unreadable-source caching.** A `source-unreadable` outcome is cached per
+  directory until that directory's own mtime changes (§7).
+
 ### v1.1 behavior superseded by v1.2
 
 - `model` is no longer an exact string comparison. It is a picomatch glob

@@ -13,10 +13,12 @@ Functional core / imperative shell; pure functions and data, no classes.
 1. **Discovery** — every turn, rule files are discovered from
    `<project>/.pi/rules/**/*.md`, from every ancestor `.pi/rules` up to the
    enclosing git root, from every nested `.pi/rules` below the working
-   directory (all of them only when the project is trusted — see
-   [Monorepo rule discovery](#monorepo-rule-discovery)), and from
-   `~/.pi/agent/rules/**/*.md` (always), parsed with a strict schema, and
-   cached by mtime.
+   directory, and — read in place, never copied — from Copilot's
+   `.github/instructions` and Claude's `.claude/rules` (all of those only when
+   the project is trusted — see [Monorepo rule discovery](#monorepo-rule-discovery)
+   and [Importers](#importers-copilot-instructions-claude-rules)), and from
+   `~/.pi/agent/rules/**/*.md` (always). Native rule files are parsed against a
+   strict schema, imported files leniently, and every file is cached by mtime.
 2. **Matching** — each rule's activation is evaluated against the live
    session: touched paths, existing files, selected tools, current model, git
    branch, and prompt-derived intent. The `exists` file scan is cached per
@@ -501,15 +503,17 @@ usage error.
 
 ## Trust model
 
-Project rules (`.pi/rules/`) load only when the project is trusted
-(pi's `isProjectTrusted()`); global rules always load. In a monorepo that
-covers every rules directory the walk-up and the nested enumeration find — an
+Project rules — `.pi/rules/` at any discovered level, and every imported
+Copilot/Claude file — load only when the project is trusted (pi's
+`isProjectTrusted()`); global rules always load. In a monorepo that covers
+every rules directory the walk-up and the nested enumeration find — an
 untrusted project lists neither the working directory's, an ancestor's, nor a
-nested `.pi/rules`, is never globbed for nested rule directories, and no git
-query is made for it. Nothing above the enclosing git root is ever read, and a
-nested rule directory can never be outside the working directory. An
-unlistable or unreadable rule source (including a failed nested enumeration) is
-reported via `/rules` and never breaks the session.
+nested `.pi/rules`, is never globbed for nested rule directories, reads no
+importer directory, and no git query is made for it. Nothing above the
+enclosing git root is ever read, and a nested rule directory can never be
+outside the working directory. An unlistable or unreadable rule source
+(including a failed nested enumeration) is reported via `/rules` and never
+breaks the session.
 
 ## Development
 
