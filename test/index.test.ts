@@ -160,6 +160,28 @@ const emitStart = async (
 	return event.systemPromptOptions.sections;
 };
 
+/**
+ * Invokes the before_agent_start handler for a run started by
+ * `pi.sendMessage(..., { triggerTurn: true })`: pi 1.3.0's `BeforeAgentStartEvent`
+ * is a union, and only the `user` variant carries a prompt, so a custom run
+ * arrives with `messageType: "custom"` and no `prompt` at all.
+ */
+const emitCustomStart = async (
+	api: ReturnType<typeof fakeApi>,
+	ctx: ExtensionContextLike,
+	sections: Record<string, string> = {},
+): Promise<Record<string, string>> => {
+	const event: BeforeAgentStartLike = {
+		type: "before_agent_start",
+		messageType: "custom",
+		systemPromptOptions: { sections, selectedTools: ["read", "edit"] },
+	};
+	for (const handler of api.starts) {
+		await handler(event, ctx);
+	}
+	return event.systemPromptOptions.sections;
+};
+
 /** Invokes the /rules command handler and returns the joined notification. */
 const invokeRules = async (api: ReturnType<typeof fakeApi>): Promise<string> => {
 	const handler = api.commands.get("rules")?.handler;
@@ -297,6 +319,21 @@ describe("createRulesExtension before_agent_start cycle", () => {
 		expect(report).toContain("active: always-on (always active)");
 		expect(report).toContain("inactive: never (");
 		expect(report).toContain(`injected: section pi-rules-md (hash `);
+	});
+
+	it("patches sections for a run started by a custom message, which carries no user prompt", async () => {
+		const rule = ruleWith({ id: "touched-rule", globs: ["src/**/*.ts"], match: "touched", alwaysApply: false });
+		const { deps } = depsWith({ rules: [rule] });
+		const api = fakeApi();
+		createRulesExtension(deps)(api.api);
+		const ctx = handlerCtx("/work");
+
+		await emitSignal(api, toolExecutionStart("edit", "/work/src/a.ts"), ctx);
+		const sections = await emitCustomStart(api, ctx);
+
+		// The cycle still runs on the folded state; the absent prompt simply
+		// contributes no intent signals instead of throwing.
+		expect(sections["pi-rules-md"]).toContain("test rule touched-rule");
 	});
 
 	it("re-applies an unchanged set with identical content so the section stays live", async () => {

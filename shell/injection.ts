@@ -7,24 +7,25 @@
  * `systemPromptOptions.sections` on `before_agent_start`, never via
  * `systemPrompt` or transcript messages).
  *
- * LOCAL structural mirror (verified against pi 0.87.1): `PromptSections`
+ * LOCAL structural mirror (verified against pi 1.3.0): `PromptSections`
  * mirrors the REAL `systemPromptOptions.sections` type —
  * `SystemPromptSections = Record<string, string>` in
- * `node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.d.ts`
+ * `node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.d.ts:56`
  * ("Ordered system prompt sections, keyed by name"), reached via
  * `BeforeAgentStartEvent.systemPromptOptions: NormalizedBuildSystemPromptOptions`
- * in `dist/core/extensions/types.d.ts`. Sections are keyed by id, not an
+ * in `dist/core/extensions/types.d.ts:725`. Sections are keyed by id, not an
  * array of `{ id, content }` entries. There is NO runtime import of pi: the
  * mirror is structural, so typed fakes can test it and pi upgrades that only
  * add fields stay assignable.
  *
  * Hash hysteresis means content STABILITY, not write skipping (T14 dogfood
- * defect fix, verified against pi 0.87.1): pi rebuilds
- * `systemPromptOptions.sections` from its base EVERY turn, so extension
- * mutations do not persist and the section must be re-applied while a block
- * exists. An identical re-apply makes pi's section diff emit nothing — the
- * hash still buys zero prompt churn, just never at the cost of a dropped
- * section.
+ * defect fix, verified against pi 1.3.0 source): `emitBeforeAgentStart` calls
+ * `normalizeBuildSystemPromptOptions(...)` on every run
+ * (`dist/core/extensions/runner.js:1121-1123`), so pi hands each turn a fresh
+ * normalized options object and extension mutations do not persist; the
+ * section must therefore be re-applied while a block exists. An identical
+ * re-apply makes pi's section diff emit nothing — the hash still buys zero
+ * prompt churn, just never at the cost of a dropped section.
  *
  * T13 wiring protocol (contract for `index.ts`, not implemented here):
  * - `{ action: "patch" }`  → `applyInjection(sections, block)`, then fold
@@ -40,7 +41,7 @@ import type { InjectionBlock } from "../src/types.ts";
 
 /**
  * Minimal structural mirror of pi's `systemPromptOptions.sections` (pi
- * 0.87.1): section id → section content, insertion-ordered.
+ * 1.3.0): section id → section content, insertion-ordered.
  */
 export type PromptSections = Record<string, string>;
 

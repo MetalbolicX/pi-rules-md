@@ -5,8 +5,21 @@
  * one injection cycle runs per turn. Load safety: pi load errors are FATAL in
  * non-interactive mode, so registration never throws and the cycle is
  * designed-total (no defensive try/catch). NO runtime import of pi: every pi
- * surface is a local structural mirror (verified against pi 0.87.1), so typed
- * fakes drive `createRulesExtension` and add-only upgrades stay assignable.
+ * surface is a local structural mirror (re-verified against pi 1.3.0,
+ * `dist/core/extensions/types.d.ts` + `dist/core/system-prompt.d.ts`), so
+ * typed fakes drive `createRulesExtension` and add-only upgrades stay
+ * assignable.
+ *
+ * pi 1.3.0 contract notes that this wiring depends on:
+ * - `before_agent_start` is a UNION (`BeforeAgentStartUserEvent` |
+ *   `BeforeAgentStartCustomEvent`): only the `user` variant carries `prompt`,
+ *   so a custom-message run contributes no intent text.
+ * - `systemPromptOptions.sections` is still a mutable `Record<string, string>`
+ *   on `NormalizedBuildSystemPromptOptions`, and the SDK documents mutating it
+ *   (rather than replacing `systemPrompt`) as the preferred delivery, so the
+ *   injection invariant is unchanged.
+ * - `ExtensionContext.isProjectTrusted()` still exists; trust gating is
+ *   unchanged.
  */
 import { homedir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -35,7 +48,10 @@ export interface ExtensionContextLike {
 /** Mirror of pi `BeforeAgentStartEvent` limited to the wiring's mutation surface. */
 export interface BeforeAgentStartLike {
 	readonly type: "before_agent_start";
-	readonly prompt: string;
+	/** What started the run; pi 1.3.0 sends `"custom"` for `sendMessage(..., { triggerTurn: true })`. */
+	readonly messageType?: "user" | "custom";
+	/** Raw user prompt — present only on `user` runs, hence optional in this union mirror. */
+	readonly prompt?: string;
 	readonly systemPromptOptions: {
 		readonly sections: Record<string, string>;
 		/** Real source for the evaluation context's tool names (normalized options). */
@@ -54,13 +70,24 @@ export interface RulesCommandOptions {
 	readonly handler: (args: string, ctx: RulesCommandContext) => Promise<void>;
 }
 
-/** Local structural subset of pi's ExtensionAPI — narrow enough for typed fakes. */
+/** Handler for the session-lifecycle / tool signals the collector folds. */
+export type SignalHandler = (event: PiEventShape, ctx: ExtensionContextLike) => unknown;
+
+/**
+ * Local structural subset of pi's ExtensionAPI — narrow enough for typed fakes.
+ *
+ * Every signature is declared per EVENT NAME, exactly as pi declares them:
+ * pi's `on` is an overload per event, so a single overload accepting a union of
+ * event names is not satisfied by it ("Type '"before_agent_start"' is not
+ * assignable to type '"project_trust"'"). The handler parameters keep the local
+ * `PiEventShape` / `BeforeAgentStartLike` mirrors — narrow, structural, and
+ * assignable in both directions — so fakes need no pi types.
+ */
 export interface PiExtensionApiLike {
-	on(event: "tool_execution_start", handler: (event: PiEventShape, ctx: ExtensionContextLike) => unknown): unknown;
-	on(
-		event: "session_compact" | "session_before_switch" | "session_before_fork",
-		handler: (event: PiEventShape, ctx: ExtensionContextLike) => unknown,
-	): unknown;
+	on(event: "tool_execution_start", handler: SignalHandler): unknown;
+	on(event: "session_compact", handler: SignalHandler): unknown;
+	on(event: "session_before_switch", handler: SignalHandler): unknown;
+	on(event: "session_before_fork", handler: SignalHandler): unknown;
 	on(event: "before_agent_start", handler: (event: BeforeAgentStartLike, ctx: ExtensionContextLike) => unknown): unknown;
 	registerCommand(name: string, options: RulesCommandOptions): void;
 	/** Structural mirror of the installed Pi registerTool definition. */
@@ -112,7 +139,10 @@ export const createRulesExtension = (deps: ExtensionDeps): ((api: PiExtensionApi
 			const result = await runInjectionCycle({
 				state,
 				cwd: ctx.cwd,
-				prompt: event.prompt,
+				// pi 1.3.0: custom-message runs carry no prompt; an empty prompt contributes
+				// no intent signals (src/intent.ts returns [] for empty text), matching the
+				// engine's existing undefined-prompt semantics.
+				prompt: event.prompt ?? "",
 				now: deps.now(),
 				trusted: ctx.isProjectTrusted(),
 				session: {

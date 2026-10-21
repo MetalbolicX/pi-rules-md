@@ -6,7 +6,7 @@
  *
  * All section fixtures are plain local records mirroring the REAL pi shape
  * (`systemPromptOptions.sections: Record<string, string>` on
- * `before_agent_start`, pi 0.87.x) — no pi runtime, no I/O, no disk.
+ * `before_agent_start`, pi 1.3.0) — no pi runtime, no I/O, no disk.
  */
 import { describe, expect, it } from "vitest";
 import { applyInjection, injectionDecision, removeInjection } from "./injection.ts";

@@ -4,16 +4,16 @@
  * mapper only — subscribing and folding happen in the index wiring (task 13).
  *
  * The `PiEventShape` union is a LOCAL, minimal structural mirror of the REAL
- * pi event surface (pi 0.87.x, `dist/core/extensions/types.d.ts`): members
+ * pi event surface (pi 1.3.0, `dist/core/extensions/types.d.ts`): members
  * carry only the discriminant plus the fields this module consumes, so real
  * pi events (which carry extra fields) remain assignable by structural
  * typing. Real names mirrored verbatim:
- * - `SessionCompactEvent`      → `session_compact`
- * - `SessionBeforeSwitchEvent` → `session_before_switch`
- * - `SessionBeforeForkEvent`   → `session_before_fork`
+ * - `SessionCompactEvent`      → `session_compact` (types.d.ts:613-621)
+ * - `SessionBeforeSwitchEvent` → `session_before_switch` (types.d.ts:589-593)
+ * - `SessionBeforeForkEvent`   → `session_before_fork` (types.d.ts:595-599)
  * - `ToolExecutionStartEvent` → `tool_execution_start` (carries
  *   `toolCallId`, `toolName`, and pre-execution `args`) — exact SDK declaration
- *   is in `dist/core/extensions/types.d.ts:673-678`.
+ *   is in `dist/core/extensions/types.d.ts:853-860`.
  *
  * NO runtime import of pi or any other package — the union is structural so
  * the collector can be tested against typed fakes and survives pi upgrades
@@ -52,7 +52,7 @@ export type PiEventShape =
 			readonly type: "tool_execution_start";
 			readonly toolCallId: string;
 			readonly toolName: string;
-			/** Pi SDK types.d.ts:673-678 declares args as any; widened to unknown. */
+			/** Pi SDK types.d.ts:853-860 declares args as any; widened to unknown. */
 			readonly args: unknown;
 	  };
 

@@ -8,8 +8,12 @@ const readRuleParameters = Type.Object({ name: Type.String() });
 /**
  * The Pi SDK tool shape, with the prompt snippet required for discovery.
  * Its execute contract mirrors the installed SDK declaration at
- * `node_modules/.store/@earendil-works+pi-coding-agent@0.87.1_ws@8.21.3/node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:345-373`:
- * `(toolCallId: string, params: Static<TParams>, signal: AbortSignal | undefined, onUpdate: AgentToolUpdateCallback<TDetails> | undefined, ctx: ExtensionContext) => Promise<AgentToolResult<TDetails>>`.
+ * `node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts:514`
+ * (`ToolDefinition` at 453-519):
+ * `(toolCallId: string, params: Static<TParams>, signal: AbortSignal | undefined, onUpdate: AgentToolUpdateCallback<TDetails> | undefined, ctx: ExtensionToolContext) => Promise<AgentToolResult<TDetails>>`.
+ * pi 1.3.0 requires `name`, `label`, `description`, and `parameters` on every
+ * definition; a definition without `promptSnippet` is omitted from the
+ * "Available tools" prompt section, so this extension pins it.
  */
 export type ReadRuleToolDefinition = ToolDefinition<typeof readRuleParameters, undefined> & {
 	readonly promptSnippet: string;
