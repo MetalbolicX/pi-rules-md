@@ -1,5 +1,5 @@
 /**
- * Predicate factories for rule activation conditions (rule format v1).
+ * Predicate factories for rule activation conditions (rule format v1.2).
  *
  * Each factory closes over the rule's field value and returns a pure
  * predicate — no classes, no mutation, no I/O. Predicates never throw: an
@@ -16,11 +16,11 @@ import type { EvaluationContext, NormalizedPath } from "../types.ts";
 /** A pure unary predicate over a value of type A. */
 export type Predicate<A> = (a: A) => boolean;
 
-/** picomatch matcher for a single path. */
+/** picomatch matcher for a single path or model id. */
 type Matcher = (path: string) => boolean;
 
 /** picomatch pattern-list factory producing a matcher. */
-type PicomatchFactory = (patterns: readonly string[]) => Matcher;
+type PicomatchFactory = (pattern: string | readonly string[]) => Matcher;
 
 // picomatch ships CJS with `export =` typings and this repo keeps
 // `esModuleInterop` off, so under Node's ESM-CJS interop the callable factory
@@ -64,8 +64,38 @@ export const toolsPredicate = (ruleTools: readonly string[]): ((ctx: EvaluationC
 	return (ctx) => ctx.toolNames.some((tool) => wanted.has(tool));
 };
 
-/** Exact, case-sensitive model-name equality; an absent session model never matches. */
-export const modelPredicate = (model: string): ((ctx: EvaluationContext) => boolean) => (ctx) => ctx.model === model;
+/**
+ * Builds a matcher for ONE model-id pattern (v1.2: `model` is a glob, not an
+ * exact string).
+ *
+ * Reuses the module's single picomatch unwrap; no path normalization and no
+ * negation handling — a model id is one flat token, and `!` is not a
+ * rule-level negation there. picomatch defaults apply, which is what keeps
+ * exact ids working as the degenerate glob (a literal pattern only matches
+ * itself, case-sensitively).
+ *
+ * Total by construction: picomatch throws on an empty (or otherwise
+ * uncompilable) pattern, so such a pattern degrades to "matches nothing" —
+ * predicates never throw.
+ */
+const modelPatternMatcher = (pattern: string): Matcher => {
+	try {
+		return picomatch(pattern);
+	} catch {
+		return () => false;
+	}
+};
+
+/**
+ * Matches the session model id against the rule's model pattern: a picomatch
+ * glob such as `*sonnet*` or `claude-opus-*`, case-sensitive. An exact id is
+ * the degenerate pattern and keeps matching only itself; an absent session
+ * model never matches.
+ */
+export const modelPredicate = (model: string): ((ctx: EvaluationContext) => boolean) => {
+	const matches = modelPatternMatcher(model);
+	return (ctx) => ctx.model !== undefined && matches(ctx.model);
+};
 
 /**
  * Exact branch-name equality (v1: no branch globs — pattern support would

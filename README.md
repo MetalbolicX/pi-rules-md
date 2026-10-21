@@ -52,6 +52,25 @@ An `alwaysApply: true` rule skips matching entirely. `tools`, `branch`, and
 `model` conditions are AND-ed with the activation mode; absent conditions mean
 "any."
 
+### Model patterns
+
+`model` is a picomatch glob over the session model id, matched
+case-sensitively, so one rule can cover a model family:
+
+```markdown
+---
+description: Extra care with long files on Claude Opus.
+version: 1
+model: "claude-opus-*"
+---
+```
+
+`*sonnet*` and `claude-opus-*` match every id containing that family name.
+A plain id such as `claude-opus-4-5` is still valid and matches only itself, so
+existing exact rules behave exactly as before. Quote any pattern that starts
+with `*` — YAML would otherwise read it as an alias. When a model condition
+fails, `/rules` names both the rule's pattern and the session model id.
+
 ## Pinned and on-demand rules
 
 Rules default to `load: pinned`: when active, their bodies are eligible for

@@ -90,6 +90,46 @@ describe("modelPredicate", () => {
 		const matches = modelPredicate("Claude");
 		expect(matches(contextWith({ model: "claude" }))).toBe(false);
 	});
+
+	it("matches a middle-wildcard family pattern", () => {
+		const matches = modelPredicate("*sonnet*");
+		expect(matches(contextWith({ model: "claude-sonnet-4-5" }))).toBe(true);
+		expect(matches(contextWith({ model: "claude-opus-4-5" }))).toBe(false);
+	});
+
+	it("matches a trailing-wildcard prefix pattern", () => {
+		const matches = modelPredicate("claude-opus-*");
+		expect(matches(contextWith({ model: "claude-opus-4-5" }))).toBe(true);
+		expect(matches(contextWith({ model: "claude-sonnet-4-5" }))).toBe(false);
+	});
+
+	it("keeps an exact id as the degenerate pattern (match, mismatch, absence)", () => {
+		const matches = modelPredicate("claude-opus-4-5");
+		expect(matches(contextWith({ model: "claude-opus-4-5" }))).toBe(true);
+		expect(matches(contextWith({ model: "claude-opus-4" }))).toBe(false);
+		expect(matches(contextWith({}))).toBe(false);
+	});
+
+	it("keeps pattern matching case-sensitive", () => {
+		const matches = modelPredicate("*Sonnet*");
+		expect(matches(contextWith({ model: "claude-sonnet-4-5" }))).toBe(false);
+	});
+
+	it("matches nothing for an empty pattern and never throws", () => {
+		const matches = modelPredicate("");
+		expect(matches(contextWith({ model: "claude-opus-4-5" }))).toBe(false);
+	});
+
+	it("keeps picomatch's own `!` negation for a negated model pattern", () => {
+		const matches = modelPredicate("!gpt-*");
+		expect(matches(contextWith({ model: "claude-opus-4-5" }))).toBe(true);
+		expect(matches(contextWith({ model: "gpt-5" }))).toBe(false);
+	});
+
+	it("keeps `*` from crossing a `/` in the model id", () => {
+		expect(modelPredicate("*sonnet*")(contextWith({ model: "anthropic/claude-sonnet-4-5" }))).toBe(false);
+		expect(modelPredicate("**/*sonnet*")(contextWith({ model: "anthropic/claude-sonnet-4-5" }))).toBe(true);
+	});
 });
 
 describe("branchPredicate", () => {

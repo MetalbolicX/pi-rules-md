@@ -263,6 +263,81 @@ describe("evaluate — non-path condition AND semantics", () => {
 	});
 });
 
+describe("evaluate — model pattern matching (v1.2)", () => {
+	it("activates a rule whose model pattern matches the session model id", async () => {
+		const trace = await evaluate(
+			[ruleWith({ id: "sonnet-only", globs: ["src/**/*.ts"], model: "*sonnet*" })],
+			contextWith({ touchedPaths: ["src/a.ts"], model: "claude-sonnet-4-5" }),
+			{ scan: scannerReturning([]).scanner, budget: 100 },
+		);
+		expect(trace.results).toEqual([
+			{
+				matched: true,
+				ruleId: ruleId("sonnet-only"),
+				reasons: [
+					{ kind: "glob", pattern: "src/**/*.ts" },
+					{ kind: "model", model: "*sonnet*" },
+				],
+			},
+		]);
+		// The rule really reaches the injected section, not just the trace.
+		expect(trace.selection.active.map((rule) => rule.id)).toEqual([ruleId("sonnet-only")]);
+		expect(trace.block?.content).toContain("## test rule");
+		expect(trace.block?.content).toContain("model `*sonnet*`");
+	});
+
+	it("matches a prefix pattern such as claude-opus-*", async () => {
+		const trace = await evaluate(
+			[ruleWith({ id: "opus-only", globs: ["src/**/*.ts"], model: "claude-opus-*" })],
+			contextWith({ touchedPaths: ["src/a.ts"], model: "claude-opus-4-5" }),
+			{ scan: scannerReturning([]).scanner, budget: 100 },
+		);
+		expect(trace.results[0]).toMatchObject({ matched: true, ruleId: ruleId("opus-only") });
+	});
+
+	it("names the model pattern and the session model id in the mismatch reason", async () => {
+		const trace = await evaluate(
+			[ruleWith({ id: "opus-only", globs: ["src/**/*.ts"], model: "claude-opus-*" })],
+			contextWith({ touchedPaths: ["src/a.ts"], model: "claude-sonnet-4-5" }),
+			{ scan: scannerReturning([]).scanner, budget: 100 },
+		);
+		const reason = reasonOf(trace.results[0]);
+		expect(reason).toContain("claude-opus-*");
+		expect(reason).toContain("claude-sonnet-4-5");
+		expect(trace.selection.active).toEqual([]);
+		expect(trace.block).toBeUndefined();
+	});
+
+	it("names the pattern and an absent session model when the session reports none", async () => {
+		const trace = await evaluate(
+			[ruleWith({ id: "sonnet-only", globs: ["src/**/*.ts"], model: "*sonnet*" })],
+			contextWith({ touchedPaths: ["src/a.ts"] }),
+			{ scan: scannerReturning([]).scanner, budget: 100 },
+		);
+		const reason = reasonOf(trace.results[0]);
+		expect(reason).toContain("*sonnet*");
+		expect(reason).toContain("absent");
+	});
+
+	it("keeps exact model ids matching exactly (success, mismatch, absence)", async () => {
+		const rule = ruleWith({ id: "exact-model", globs: ["src/**/*.ts"], model: "claude-opus-4-5" });
+		const scan = scannerReturning([]).scanner;
+		const hit = await evaluate([rule], contextWith({ touchedPaths: ["src/a.ts"], model: "claude-opus-4-5" }), { scan, budget: 100 });
+		expect(hit.results[0]).toEqual({
+			matched: true,
+			ruleId: ruleId("exact-model"),
+			reasons: [
+				{ kind: "glob", pattern: "src/**/*.ts" },
+				{ kind: "model", model: "claude-opus-4-5" },
+			],
+		});
+		const miss = await evaluate([rule], contextWith({ touchedPaths: ["src/a.ts"], model: "claude-opus-4" }), { scan, budget: 100 });
+		expect(miss.results[0]?.matched).toBe(false);
+		const absent = await evaluate([rule], contextWith({ touchedPaths: ["src/a.ts"] }), { scan, budget: 100 });
+		expect(absent.results[0]?.matched).toBe(false);
+	});
+});
+
 describe("evaluate — matched reason ordering", () => {
 	it("orders path reasons, then tools in declaration order, then model, then branch", async () => {
 		const trace = await evaluate(

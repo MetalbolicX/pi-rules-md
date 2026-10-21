@@ -206,10 +206,17 @@ describe("model spec", () => {
 		expect(conditionSpec("model").describe("claude-opus-4")).toBe("model: claude-opus-4");
 	});
 
-	it("builds an exact-match ctx predicate", () => {
+	it("keeps an exact id matching exactly through the registry predicate", () => {
 		const matches = ctxPredicateFor("model", "claude");
 		expect(matches(contextWith({ model: "claude" }))).toBe(true);
 		expect(matches(contextWith({ model: "gpt" }))).toBe(false);
+		expect(matches(contextWith({}))).toBe(false);
+	});
+
+	it("builds a glob ctx predicate over the session model id", () => {
+		const matches = ctxPredicateFor("model", "*sonnet*");
+		expect(matches(contextWith({ model: "claude-sonnet-4-5" }))).toBe(true);
+		expect(matches(contextWith({ model: "claude-opus-4-5" }))).toBe(false);
 		expect(matches(contextWith({}))).toBe(false);
 	});
 });

@@ -1,4 +1,4 @@
-# Rule Format v1.1 (RULE-SPEC)
+# Rule Format v1.2 (RULE-SPEC)
 
 Normative specification for pi-rules-md rule files and runtime behavior.
 Frontmatter shape and value constraints are enforced by the parser
@@ -41,7 +41,7 @@ globs:
 match: touched
 tools: [edit, write]
 branch: main
-model: sonnet
+model: "*sonnet*"
 priority: 10
 enforcement: enforce
 load: pinned
@@ -61,8 +61,8 @@ section when the rule is active.
 | `globs` | string[] | see §4 | — | Glob patterns (OR semantics); `!`-prefixed entries are negations. |
 | `match` | `touched` \| `exists` \| `both` | ✘ | `both` | Activation mode (§5). |
 | `tools` | string[] | ✘ | — | Active only when the current tool selection intersects. |
-| `branch` | string | ✘ | — | Active only on this git branch (v1: no live branch source in pi; reserved). |
-| `model` | string | ✘ | — | Active only when the current model name matches. |
+| `branch` | string | ✘ | — | Active only on this git branch (v1.2: no live branch source in pi; reserved, and still matched as an exact name). |
+| `model` | string | ✘ | — | Active only when the session model id matches this picomatch glob pattern; an exact id is the degenerate pattern (§5). |
 | `priority` | integer | ✘ | `0` | Higher wins in selection; ties keep discovery order (stable). |
 | `enforcement` | `enforce` \| `recommend` \| `inform` | ✘ | `inform` | Parsed and validated; does NOT affect selection or rendering in v1 (reserved for future emphasis). |
 | `load` | `pinned` \| `on-demand` | ✘ | `pinned` | Loading policy metadata; materialized by parsing and does not itself alter condition matching. |
@@ -98,6 +98,20 @@ positive pattern, then excluded if it matches any negation.
 - `both` — touched **OR** exists (the default).
 - Condition keys (`tools`, `branch`, `model`) are AND-ed on top of the
   activation mode; absent means "any".
+- `model` is a **picomatch glob pattern over the session model id**, evaluated
+  case-sensitively. `*sonnet*` and `claude-opus-*` select a model family; an
+  exact id such as `claude-opus-4-5` is the degenerate pattern and matches only
+  itself, so v1.1 rules keep their behavior. Patterns are matched against the
+  id as one flat token: no path normalization, and a pattern that cannot
+  compile (including the empty string) matches nothing rather than raising.
+  picomatch's own semantics still apply: a leading `!` negates the pattern, and
+  `*` never crosses a `/` (use a `**/` prefix if an id ever contains one).
+  Quote patterns that start with `*` — unquoted `*sonnet*` is a YAML alias, not
+  a string. `branch` matching stays exact in v1.2.
+- When a declared `model` pattern does not match, the `/rules` report and the
+  trace reason name both the pattern and the session model id
+  (`model mismatch: session model <id> does not match the rule's model pattern
+  <pattern>`), or `absent` when the session reports no model.
 - `alwaysApply: true` skips activation and conditions entirely.
 - Before evaluation, the current turn prompt is checked for whole-word, case-insensitive language names: python/pytest → `*.py`, rust → `*.rs`, typescript → `*.ts`, javascript → `*.js`, golang → `*.go`, kotlin → `*.kt`, java → `*.java`, csharp → `*.cs`, ruby → `*.rb`. There is intentionally no bare `go` language trigger.
 - The current turn prompt is also checked for whole-word, case-insensitive matches against each rule's `keywords`; a hit donates that rule's positive globs to the intent set. Keyword metadata does not activate the rule by itself. Intent globs can satisfy a rule's `globs` condition independently of touched/existing path matches, but do not bypass other conditions.
@@ -179,6 +193,17 @@ we do not parse paths from shell command strings.
   even when it exceeds the budget.
 - The pinned entry heading is `## <description>` (not `## <id>`), matching the
   renderer and its contract tests.
+
+### v1.1 behavior superseded by v1.2
+
+- `model` is no longer an exact string comparison. It is a picomatch glob
+  pattern over the session model id, matched case-sensitively; exact ids remain
+  valid patterns and keep matching exactly. Tools, `branch`, globs, and
+  `alwaysApply` semantics are unchanged in v1.2.
+- The `model` mismatch reason now names the rule's pattern and the session model
+  id together, instead of only the required value.
+- The specification's own example rule used `model: sonnet`, which matched no
+  real model id; it is now `model: "*sonnet*"`.
 
 ## 7. Errors (visible via `/rules`)
 
