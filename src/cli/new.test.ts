@@ -359,3 +359,31 @@ describe("pi-rules new — help", () => {
     expect(NEW_USAGE).toContain("Exit code: 0 when the file was created, 1 when");
   });
 });
+
+describe("pi-rules new — dry-run contract (R3-001)", () => {
+  test("--dry-run prints the would-create message and writes nothing", async () => {
+    const base = await workspace();
+    const project = path.join(base, "project");
+    await mkdir(project, { recursive: true });
+    process.chdir(project);
+    const { io, agentDir } = await flowIo(base);
+    const options = flowOptions(io, agentDir, { name: "use-tabs", dryRun: true });
+    const exit = await newFlow(options);
+    expect(exit).toBe(0);
+    expect(io.stdout).toEqual([`[dry-run] Would create ${path.join(project, ".pi", "rules", "use-tabs.md")}`]);
+    expect(io.stderr).toEqual([]);
+    await expect(stat(path.join(project, ".pi"))).rejects.toThrow();
+  });
+
+  test("a real run after --dry-run still succeeds (no surprise state)", async () => {
+    const base = await workspace();
+    const project = path.join(base, "project");
+    await mkdir(project, { recursive: true });
+    process.chdir(project);
+    const { io, agentDir } = await flowIo(base);
+    await newFlow(flowOptions(io, agentDir, { name: "use-tabs", dryRun: true }));
+    const exit = await newFlow(flowOptions(io, agentDir, { name: "use-tabs" }));
+    expect(exit).toBe(0);
+    expect((await stat(path.join(project, ".pi", "rules", "use-tabs.md"))).isFile()).toBe(true);
+  });
+});

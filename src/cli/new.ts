@@ -210,6 +210,12 @@ export const newFlow = async (options: FlowOptions, deps: NewDeps = nodeNewDeps(
 		global: options.global === true,
 		agentDir: resolveAgentDir(options.agentDir, env),
 	});
+	if (options.dryRun) {
+		// Print-only mode is decided before any filesystem effect, so the rules
+		// directory is not even created (the README --dry-run contract).
+		emit("stdout", options, [`[dry-run] Would create ${target.file}`]);
+		return 0;
+	}
 	try {
 		await deps.mkdir(target.dir);
 		await deps.writeFile(target.file, scaffoldRuleFile(validated.value));
