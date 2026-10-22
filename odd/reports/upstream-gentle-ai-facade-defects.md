@@ -73,3 +73,32 @@ Lineage `review-728484f14c25bdc3` (HIGH tier, 3 lenses, committed-only base-diff
 No reviewer ran; `mutation_performed: false` on every rejection; authority unconsumed. Fresh STATUS before each retry re-offered identical bindings, so no slot ever became capturable. Disposition: parked as defect evidence per user decision (honest-fallback close on independent verification; no delivery claim made from this review). Candidate: commit `3fa8beb` (T11 ancestor discovery, 10 files, 1117 changed lines) in the same repository as the original report.
 
 Lineage inventory addendum: `review-792779f655e07d98` (T0 SDK fix) and `review-0555c72c8407c5fc` (explicit committed range) approved + acknowledged normally in this session — one with a single-slot retry after a malformed reviewer payload — so the group and single routes both remain intermittently functional, consistent with the state-dependent theory in Defect 2.
+
+## Addendum 3 — 2026-10-21: correction-state binding rejected against moved snapshot (lineage review-3cce5f0ac9f78c1d)
+
+Session context: 13 consecutive healthy lineages the same day (12 approved+acknowledged
+slice reviews plus one group whose refuter transitioned normally). Defect reproduces only
+in the correction state:
+
+- Slice-14 review (T16, target sha256:de6920ce…) reached `correction_required` after the
+  provider refuter admitted a deterministic BLOCKER (R3-001: `pi-rules new --dry-run`
+  wrote the file it promised only to print).
+- The bounded correction was implemented, RED→GREEN (958/958), and committed
+  (c9f09da) on the reviewed branch.
+- Fresh bound STATUS reoffered the correction-plan slot. Its provider-issued
+  collectBinding still carries `--target=sha256:de6920ce…` (the frozen authority
+  target) while `projection.current_snapshot_identity` has rotated to
+  `sha256:ea24c220…` after the correction commit.
+- `gentle_review_capture` rejected that exact binding twice (object form, then the
+  verbatim STATUS string) with:
+  `collectBinding does not carry one non-empty matching provider lineage and target token`.
+- Hypothesis (consistent with Defect-2 / addendum-2 state-dependent theory): in the
+  correction state the validator compares the binding's target token against the
+  current snapshot identity, which the provider's own correction binding can never
+  match because it names the frozen target. No compliant submission exists.
+
+Disposition: lineage review-3cce5f0ac9f78c1d parked in `correction_required`
+(authority unconsumed) as defect evidence, per the user's standing honest-fallback
+policy. The BLOCKER finding itself is closed by direct evidence: correction commit
+c9f09da, full suite 958/958, tsc/oxlint clean. No delivery claim is made from the
+parked review.
